@@ -2,7 +2,12 @@
 # source .venv/bin/activate
 # export PYTHONPATH=/home/anna/projects/chexpert_poc
 
+# python scripts/check_dataset.py --config configs/base.yaml --sample-size 32
+# python scripts/sanity_dataloader.py
 # python train.py --config configs/base.yaml
+# python eval.py --config configs/base.yaml
+# python threshold_tune.py --config configs/base.yaml --criterion f1
+# python error_analysis.py --config configs/base.yaml
 
 from __future__ import annotations
 

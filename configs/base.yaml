@@ -43,24 +43,18 @@ model:
 
 train:
   # Core optimization settings
-  epochs: 3                      # 전체 train set을 몇 번 반복해서 학습할지
+  epochs: 4                      # 전체 train set을 몇 번 반복해서 학습할지
   lr: 0.0001                     # learning rate. 가중치를 얼마나 크게 업데이트할지 정하는 핵심 값
   weight_decay: 0.0              # L2 regularization 강도. 0이면 사용 안 함
   optimizer: adam                # 최적화 알고리즘. 여기서는 Adam 사용
 
   # Class imbalance handling
   use_pos_weight: true           # 양성 샘플이 적은 라벨에 더 큰 가중치를 줘서 불균형 보정
-  pos_weight_clip_max: null      # pos_weight의 최대값 제한
-                                 # null이면 클리핑 안 하고 계산된 값을 그대로 사용
+  pos_weight_clip_max: 8        # pos_weight의 최대값 제한
 
   # Runtime / performance defaults
   amp: true                      # Automatic Mixed Precision 사용
-                                 # FP16/BF16 일부 혼합으로 속도/메모리 효율 개선
   channels_last: true            # 텐서 메모리 포맷을 channels_last로 사용
-                                 # CNN에서 GPU 성능이 좋아질 수 있음
   max_grad_norm: null            # gradient clipping 상한값
-                                 # null이면 clipping 안 함
-  cudnn_benchmark: false         # cuDNN이 최적 커널을 탐색할지 여부
-                                 # false면 재현성 쪽에 유리, true면 고정 입력 크기에서 속도 향상 가능
+  cudnn_benchmark: true         # cuDNN이 최적 커널을 탐색할지 여부
   matmul_precision: high         # torch의 행렬곱 정밀도 설정
-                                 # high면 속도와 정밀도의 균형을 잡는 쪽
