@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual env
+.venv/
+venv/
+
+# Environment
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Training artifacts
+outputs/
+checkpoints/
+logs/
+
+# Data (top-level only)
+#/data/         # 실제로 루트 data 폴더를 안 쓰면 주석 유지
+#/datasets/     # 실제로 루트 datasets 폴더를 안 쓰면 주석 유지
+
+# Model / large binary artifacts
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.npz
+
+# Large generated analysis files
+*.csv.tmp
+*.json.tmp

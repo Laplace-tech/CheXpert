@@ -1,0 +1,66 @@
+project:
+  name: chexpert_poc 
+  seed: 42
+
+paths:
+  # Main source of truth for Python scripts
+  chexpert_root: /home/anna/datasets/cxr/chexpert_small/raw    # CheXpert-small 원본 데이터셋 루트 경로
+  output_root: /home/anna/projects/chexpert_poc/outputs        # 학습 결과(체크포인트, 로그, 예측 csv 등)를 저장할 폴더
+
+data:
+  # NOTE:
+  # path_column is currently used by scripts/check_dataset.py.
+  # chexpert_dataset.py still hardcodes "Path" internally and should be fixed later.
+  path_column: Path              # CSV에서 이미지 경로가 들어 있는 컬럼명. 현재는 "Path" 컬럼을 사용
+
+  # Official 5-task subset used in this project
+  target_labels:                
+    - Atelectasis                # 무기폐
+    - Cardiomegaly               # 심장비대
+    - Consolidation              # 경화
+    - Edema                      # 폐부종
+    - Pleural Effusion           # 흉막삼출
+
+  # Image / loader settings
+  image_size: 320                # 입력 이미지를 320x320으로 리사이즈
+  batch_size: 32                 # 한 번의 iteration에서 GPU에 올릴 이미지 개수
+  num_workers: 4                 # DataLoader가 데이터를 미리 읽어오는 프로세스 수
+  pin_memory: true               # CPU->GPU 전송을 빠르게 하려고 pinned memory 사용
+  persistent_workers: true       # epoch이 바뀌어도 worker를 매번 새로 안 띄우고 유지해서 로딩 오버헤드 감소
+
+  # Label / view policy
+  uncertainty_strategy: U-Ignore # CheXpert의 불확실 라벨(-1) 처리 방식
+                                 # U-Ignore면 -1인 샘플은 해당 라벨 loss 계산에서 제외
+  view_mode: frontal_only        # 정면 X-ray만 사용. lateral(측면) 이미지는 제외
+
+
+model:
+  # Currently only DenseNet121 is actually implemented
+  backbone: densenet121          # 사용할 백본 모델 이름. 현재는 DenseNet121만 실제 구현됨
+  pretrained: true               # ImageNet 사전학습 가중치로 시작할지 여부
+  num_classes: 5                 # 출력 노드 수. 지금은 5개 병변을 각각 독립적으로 예측하므로 5
+
+
+train:
+  # Core optimization settings
+  epochs: 3                      # 전체 train set을 몇 번 반복해서 학습할지
+  lr: 0.0001                     # learning rate. 가중치를 얼마나 크게 업데이트할지 정하는 핵심 값
+  weight_decay: 0.0              # L2 regularization 강도. 0이면 사용 안 함
+  optimizer: adam                # 최적화 알고리즘. 여기서는 Adam 사용
+
+  # Class imbalance handling
+  use_pos_weight: true           # 양성 샘플이 적은 라벨에 더 큰 가중치를 줘서 불균형 보정
+  pos_weight_clip_max: null      # pos_weight의 최대값 제한
+                                 # null이면 클리핑 안 하고 계산된 값을 그대로 사용
+
+  # Runtime / performance defaults
+  amp: true                      # Automatic Mixed Precision 사용
+                                 # FP16/BF16 일부 혼합으로 속도/메모리 효율 개선
+  channels_last: true            # 텐서 메모리 포맷을 channels_last로 사용
+                                 # CNN에서 GPU 성능이 좋아질 수 있음
+  max_grad_norm: null            # gradient clipping 상한값
+                                 # null이면 clipping 안 함
+  cudnn_benchmark: false         # cuDNN이 최적 커널을 탐색할지 여부
+                                 # false면 재현성 쪽에 유리, true면 고정 입력 크기에서 속도 향상 가능
+  matmul_precision: high         # torch의 행렬곱 정밀도 설정
+                                 # high면 속도와 정밀도의 균형을 잡는 쪽
