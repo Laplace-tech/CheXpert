@@ -8,9 +8,7 @@ paths:
   output_root: /home/anna/projects/chexpert_poc/outputs        # 학습 결과(체크포인트, 로그, 예측 csv 등)를 저장할 폴더
 
 data:
-  # NOTE:
   # path_column is currently used by scripts/check_dataset.py.
-  # chexpert_dataset.py still hardcodes "Path" internally and should be fixed later.
   path_column: Path              # CSV에서 이미지 경로가 들어 있는 컬럼명. 현재는 "Path" 컬럼을 사용
 
   # Official 5-task subset used in this project

@@ -1,7 +1,7 @@
 # cd /home/anna/projects/chexpert_poc
 # source .venv/bin/activate
 # export PYTHONPATH=/home/anna/projects/chexpert_poc
-
+#
 # python scripts/check_dataset.py --config configs/base.yaml --sample-size 32
 # python scripts/sanity_dataloader.py
 # python train.py --config configs/base.yaml
@@ -17,18 +17,26 @@ import time
 from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import torch
 from dotenv import load_dotenv
 from tqdm import tqdm
 
+# 모델 구조 생성 담당: DenseNet121 backbone + 마지막 classifier 교체
 from chexpert_poc.models.densenet import build_densenet121
+
+# train dataset 기준 각 병변 라벨별로 pos_weight 계산
+# 콘솔 출력용 포맷 문자열 생성
 from chexpert_poc.utils.class_weights import (
     compute_pos_weight_from_dataset,
     format_pos_weight_stats,
 )
+
+# 모델 logits + dataset label / loss mask를 실제 학습 손실로 계산
 from chexpert_poc.utils.losses import masked_bce_with_logits
+
+# config 로드 / dataloader 생성 / optimizer 생성 / 저장 유틸
 from chexpert_poc.utils.train_utils import (
     build_optimizer,
     create_dataloaders,
@@ -41,6 +49,7 @@ from chexpert_poc.utils.train_utils import (
 )
 
 
+# 로그 출력용: 3721초 -> "1h 02m 01s"
 def format_seconds(seconds: float) -> str:
     seconds = max(float(seconds), 0.0)
     total = int(round(seconds))
@@ -119,14 +128,76 @@ def save_history_csv(history: list[dict[str, Any]], path: str | Path) -> None:
         writer.writerows(history)
 
 
+# ---------------------------------------------------------
+# 안전한 config access helper
+# ---------------------------------------------------------
+
+def require_bool(name: str, value: Any) -> bool:
+    # 문자열 "false" 같은 걸 bool(...)로 잘못 True 처리하지 않도록
+    # 진짜 bool만 허용
+    if isinstance(value, bool):
+        return value
+    raise TypeError(f"{name} must be bool, got {type(value).__name__}: {value!r}")
+
+
+def get_section(config: dict, section: str) -> dict[str, Any]:
+    value = config.get(section)
+    if not isinstance(value, dict):
+        raise TypeError(f"config['{section}'] must be dict, got {type(value).__name__}")
+    return value
+
+
+def get_config_bool(
+    config: dict,
+    section: str,
+    key: str,
+    default: bool | None = None,
+) -> bool:
+    section_dict = get_section(config, section)
+
+    if key in section_dict:
+        return require_bool(f"{section}.{key}", section_dict[key])
+
+    if default is not None:
+        return default
+
+    raise KeyError(f"Missing required bool config: {section}.{key}")
+
+
+def resolve_num_classes(config: dict) -> int:
+    # num_classes의 단일 source of truth를 data.target_labels 길이로 맞춤
+    data_cfg = get_section(config, "data")
+    model_cfg = get_section(config, "model")
+
+    target_labels = data_cfg.get("target_labels")
+    if not isinstance(target_labels, Sequence) or isinstance(target_labels, (str, bytes)):
+        raise TypeError("data.target_labels must be a non-string sequence")
+    if len(target_labels) == 0:
+        raise ValueError("data.target_labels must not be empty")
+
+    derived_num_classes = len(target_labels)
+
+    # model.num_classes가 있으면 일치 여부만 검증
+    if "num_classes" in model_cfg:
+        configured_num_classes = int(model_cfg["num_classes"])
+        if configured_num_classes != derived_num_classes:
+            raise ValueError(
+                "model.num_classes does not match len(data.target_labels): "
+                f"{configured_num_classes} vs {derived_num_classes}"
+            )
+
+    return derived_num_classes
+
+
 def maybe_enable_cudnn_benchmark(config: dict) -> None:
-    use_benchmark = bool(config["train"].get("cudnn_benchmark", False))
+    use_benchmark = get_config_bool(config, "train", "cudnn_benchmark", default=False)
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = use_benchmark
 
 
 def maybe_set_matmul_precision(config: dict) -> None:
-    precision = str(config["train"].get("matmul_precision", "high"))
+    train_cfg = get_section(config, "train")
+    precision = str(train_cfg.get("matmul_precision", "high"))
     if hasattr(torch, "set_float32_matmul_precision"):
         torch.set_float32_matmul_precision(precision)
 
@@ -182,6 +253,9 @@ def build_checkpoint_payload(
     }
 
 
+# 실제 훈련 코드
+# - image -> model -> logits
+# - logits + label + loss_mask + pos_weight -> masked_bce_with_logits
 def train_one_epoch(
     model: torch.nn.Module,
     loader,
@@ -223,7 +297,14 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
 
         with get_autocast_context(device=device, use_amp=use_amp):
+            # [densenet.py]
+            # - 출력은 sigmoid 없는 raw logits [B, C]
             logits = model(images)
+
+            # [losses.py]
+            # - BCEWithLogits 계산
+            # - loss_mask==0 는 제외
+            # - pos_weight 있으면 양성 오차를 더 크게 반영
             loss_sum = masked_bce_with_logits(
                 logits=logits,
                 targets=labels,
@@ -231,6 +312,8 @@ def train_one_epoch(
                 pos_weight=pos_weight,
                 reduction="sum",
             )
+
+            # 유효 라벨 수 기준 평균 loss 산출
             valid_count = loss_mask.sum().clamp_min(1.0)
             loss = loss_sum / valid_count
 
@@ -367,11 +450,16 @@ def main() -> None:
     maybe_enable_cudnn_benchmark(config)
     maybe_set_matmul_precision(config)
 
+    # bool(...) 캐스팅 제거: 진짜 bool만 허용
     device = get_device()
-    requested_amp = bool(config["train"].get("amp", True))
+    requested_amp = get_config_bool(config, "train", "amp", default=True)
     effective_amp = requested_amp and device.type == "cuda"
-    channels_last = bool(config["train"].get("channels_last", True))
-    max_grad_norm = validate_max_grad_norm(config["train"].get("max_grad_norm", None))
+    channels_last = get_config_bool(config, "train", "channels_last", default=True)
+    use_pos_weight = get_config_bool(config, "train", "use_pos_weight", default=True)
+    max_grad_norm = validate_max_grad_norm(get_section(config, "train").get("max_grad_norm", None))
+
+    # num_classes 단일 source of truth = len(data.target_labels)
+    num_classes = resolve_num_classes(config)
 
     run_name = datetime.now().strftime("run_%Y%m%d_%H%M%S")
     run_dir = ensure_dir(Path(config["paths"]["output_root"]) / "train_runs" / run_name)
@@ -384,16 +472,18 @@ def main() -> None:
 
     pos_weight = None
     pos_weight_stats = None
-    if bool(config["train"].get("use_pos_weight", True)):
+    if use_pos_weight:
         pos_weight, pos_weight_stats = compute_pos_weight_from_dataset(
             dataset=train_loader.dataset,
-            clip_max=config["train"].get("pos_weight_clip_max", None),
+            clip_max=get_section(config, "train").get("pos_weight_clip_max", None),
         )
         pos_weight = pos_weight.to(device)
 
+    pretrained = get_config_bool(config, "model", "pretrained", default=True)
+
     model = build_densenet121(
-        num_classes=int(config["model"]["num_classes"]),
-        pretrained=bool(config["model"]["pretrained"]),
+        num_classes=num_classes,
+        pretrained=pretrained,
     )
 
     if channels_last:
@@ -412,8 +502,8 @@ def main() -> None:
 
     model_info = {
         "model_name": config["model"]["backbone"],
-        "num_classes": int(config["model"]["num_classes"]),
-        "pretrained": bool(config["model"]["pretrained"]),
+        "num_classes": num_classes,
+        "pretrained": pretrained,
         "trainable_parameters": count_trainable_parameters(model),
         "device": str(device),
         "requested_amp": requested_amp,
@@ -437,6 +527,9 @@ def main() -> None:
     print(f"requested_amp       : {requested_amp}")
     print(f"effective_amp       : {effective_amp}")
     print(f"channels_last       : {channels_last}")
+    print(f"use_pos_weight      : {use_pos_weight}")
+    print(f"num_classes         : {num_classes}")
+    print(f"pretrained          : {pretrained}")
     print(f"run_dir             : {run_dir}")
     print(f"trainable_parameters: {model_info['trainable_parameters']:,}")
 

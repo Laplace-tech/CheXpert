@@ -9,15 +9,20 @@ from PIL import Image                # 이미지 열기
 from torch.utils.data import Dataset # Pytorch 데이터셋 클래스 상속용
 from torchvision import transforms   # 이미지 전처리용
 
-# 라벨 정책 가져오기
+# [import: labels.py]
+# - 여기서 라벨 정책을 불러온다
 from chexpert_poc.datasets.labels import (
-    CHEXPERT_5_LABELS,              # 5개 타겟 레벨
-    encode_chexpert_label,          # NaN / 0 / 1 / -1
-    is_frontal_view,                # frontal 이미지인지 판별
-    validate_uncertainty_strategy,  # U-Ignore, U-Ones 검증
+    CHEXPERT_5_LABELS,              # 이 5개를 기본값으로 사용
+    encode_chexpert_label,          # raw CSV 라벨(NaN/0/1/-1) => (label_value, loss_mask_value)로 변환
+    is_frontal_view,                # frontal_only일 때 row를 남길지 버릴지 판정
+    validate_uncertainty_strategy,  # U-Ignore / U-Ones 설정값 검증
 )
 
-# CSV Path 앞에 자주 붙는 prefix들
+# CSV의 Path 컬럼 값 앞에 붙을 수 있는 prefix 목록
+# : resolve_image_path()에서 실제 로컬 파일 경로를 찾을 때 사용
+# ex)
+# - CheXpert-v1.0-small/train/patient00001/study1/view1_frontal.jpg
+# - CheXpert-v1.0-small/valid/patient64541/study1/view1_frontal.jpg
 KNOWN_CSV_PATH_PREFIXES: Final[tuple[str, ...]] = (
     "CheXpert-v1.0-small/",
     "CheXpert-v1.0/",
@@ -28,60 +33,41 @@ KNOWN_CSV_PATH_PREFIXES: Final[tuple[str, ...]] = (
 VALID_VIEW_MODES: Final[set[str]] = {"frontal_only", "all"}
 
 
-def resolve_image_path(raw_root: Path, csv_path_value: object) -> Optional[Path]:
-    """
-    CSV의 Path 값을 실제 로컬 이미지 경로로 해석.
-    경로 표현이 제각각일 수 있어서 여러 후보를 순서대로 시도한다.
-    """
-    if pd.isna(csv_path_value):
-        return None
+# [바깥에서 제일 먼저 호출되는 wrapper]
+# - train.py / eval.py / threshold_tune.py 등에서 dataset 만들 때의 진입점
+def build_chexpert_dataset(
+    config: dict,
+    split: str,
+    transform: Optional[Callable] = None,
+) -> CheXpertDataset:
+    
+    # raw_root: CheXpert-small 원본 데이터셋 루트 경로
+    # csv_path: CSV 파일이 있는 경로:
+    #   ex:
+    #   - /home/anna/datasets/cxr/chexpert_small/raw/train.csv 
+    #   - /home/anna/datasets/cxr/chexpert_small/raw/valid.csv
+    raw_root = Path(config["paths"]["chexpert_root"])
+    csv_path = raw_root / f"{split}.csv"
 
-    path_str = str(csv_path_value).strip().replace("\\", "/")
-    if not path_str:
-        return None
-
-    original = Path(path_str)
-    candidates: list[Path] = []
-
-    if original.is_absolute():
-        candidates.append(original)  # 절대경로면 그대로 시도
-
-    candidates.append(raw_root / path_str)  # raw_root 기준
-
-    stripped = path_str
-    for prefix in KNOWN_CSV_PATH_PREFIXES:
-        if stripped.startswith(prefix):
-            stripped = stripped[len(prefix):]
-            break
-    stripped = stripped.lstrip("/")
-
-    candidates.append(raw_root / stripped)         # prefix 제거 후 raw_root 기준
-    candidates.append(raw_root.parent / path_str)  # raw_root.parent 기준 fallback
-    candidates.append(raw_root.parent / stripped)
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.resolve()
-
-    return None
-
-
-def build_image_transform(image_size: int) -> Callable:
-    """
-    기본 입력 전처리.
-    현재는 train/valid augmentation 분리 없이 공통 transform 사용.
-    """
-    return transforms.Compose(
-        [
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225],
-            ),  # DenseNet pretrained 기준 ImageNet normalize
-        ]
+    # [base.yaml]
+    # - paths.chexpert_root: /home/anna/datasets/cxr/chexpert_small/raw
+    # - data.image_size: 320
+    # - data.uncertainty_strategy: U-Ignore
+    # - data.view_mode: frontal_only
+    # - data.target_labels: [Atelectasis, Cardiomegaly ....]
+    # - data.path_column: Path
+    return CheXpertDataset(
+        csv_path=csv_path, 
+        raw_root=raw_root,
+        split=split,
+        
+        image_size=int(config["data"]["image_size"]),
+        uncertainty_strategy=config["data"]["uncertainty_strategy"], 
+        view_mode=config["data"].get("view_mode", "frontal_only"),
+        transform=transform,
+        target_labels=config["data"].get("target_labels", list(CHEXPERT_5_LABELS)),
+        path_column=config["data"].get("path_column", "Path"),
     )
-
 
 class CheXpertDataset(Dataset):
     """
@@ -102,10 +88,13 @@ class CheXpertDataset(Dataset):
     ) -> None:
         super().__init__()
 
-        self.csv_path = Path(csv_path)
-        self.raw_root = Path(raw_root)
-        self.split = str(split)
+        # 생성자 인자를 내부 상태로 저장
+        self.csv_path = Path(csv_path) # raw_root: "train.csv" 혹은 "valid.csv"
+        self.raw_root = Path(raw_root) # base.yml의 paths.chexpert_root
+        self.split = str(split)        # "train" 또는 "valid" 문자열
         self.image_size = int(image_size)
+        
+        
         self.uncertainty_strategy = validate_uncertainty_strategy(uncertainty_strategy)
         self.view_mode = self._validate_view_mode(view_mode)
         self.path_column = str(path_column)
@@ -283,23 +272,56 @@ class CheXpertDataset(Dataset):
         }
 
 
-def build_chexpert_dataset(
-    config: dict,
-    split: str,
-    transform: Optional[Callable] = None,
-) -> CheXpertDataset:
-    # config 기준으로 train / valid dataset 생성하는 wrapper
-    raw_root = Path(config["paths"]["chexpert_root"])
-    csv_path = raw_root / f"{split}.csv"
+def resolve_image_path(raw_root: Path, csv_path_value: object) -> Optional[Path]:
+    """
+    CSV의 Path 값을 실제 로컬 이미지 경로로 해석.
+    경로 표현이 제각각일 수 있어서 여러 후보를 순서대로 시도한다.
+    """
+    if pd.isna(csv_path_value):
+        return None
 
-    return CheXpertDataset(
-        csv_path=csv_path,
-        raw_root=raw_root,
-        split=split,
-        image_size=int(config["data"]["image_size"]),
-        uncertainty_strategy=config["data"]["uncertainty_strategy"],
-        view_mode=config["data"].get("view_mode", "frontal_only"),
-        transform=transform,
-        target_labels=config["data"].get("target_labels", list(CHEXPERT_5_LABELS)),
-        path_column=config["data"].get("path_column", "Path"),
+    path_str = str(csv_path_value).strip().replace("\\", "/")
+    if not path_str:
+        return None
+
+    original = Path(path_str)
+    candidates: list[Path] = []
+
+    if original.is_absolute():
+        candidates.append(original)  # 절대경로면 그대로 시도
+
+    candidates.append(raw_root / path_str)  # raw_root 기준
+
+    stripped = path_str
+    for prefix in KNOWN_CSV_PATH_PREFIXES:
+        if stripped.startswith(prefix):
+            stripped = stripped[len(prefix):]
+            break
+    stripped = stripped.lstrip("/")
+
+    candidates.append(raw_root / stripped)         # prefix 제거 후 raw_root 기준
+    candidates.append(raw_root.parent / path_str)  # raw_root.parent 기준 fallback
+    candidates.append(raw_root.parent / stripped)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+
+    return None
+
+
+def build_image_transform(image_size: int) -> Callable:
+    """
+    기본 입력 전처리.
+    현재는 train/valid augmentation 분리 없이 공통 transform 사용.
+    """
+    return transforms.Compose(
+        [
+            transforms.Resize((image_size, image_size)), # 320x320 같은 고정 입력 크기 맞춤
+            transforms.ToTensor(),                       # PIL Image -> torch.Tensor (C,H,W)
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225],
+            ),  # ImageNet pretrained DenseNet 기준 normalize
+        ]
     )

@@ -208,7 +208,7 @@ def main() -> None:
     parser.add_argument(
         "--alpha",
         type=float,
-        default=0.35,
+        default=0.75,
         help="overlay 강도 (0~1)",
     )
     args = parser.parse_args()
@@ -254,30 +254,23 @@ def main() -> None:
     tensor = transform(image_for_model).unsqueeze(0)
     tensor = move_tensor(tensor, device=device, channels_last=channels_last)
 
+    with torch.no_grad():
+        logits_for_choice = model(tensor)
+        probs = logits_to_probs(logits_for_choice)[0].detach().cpu().tolist()
+
+    target_label, target_idx = choose_target_label(
+        label_names=label_names,
+        probs=probs,
+        thresholds=thresholds,
+        label_arg=args.label,
+    )
+
     gradcam = GradCAM(model=model, target_layer=model.features)
     try:
-        # 먼저 한 번 forward/backward 해서 CAM과 logits를 같이 얻는다.
-        # label 미지정이면 logits로 최고 확률 라벨을 고른 후 다시 backward 1회 수행.
-        initial_out = gradcam.generate(tensor, class_idx=0)
-        probs = logits_to_probs(initial_out.logits)[0].detach().cpu().tolist()
-
-        target_label, target_idx = choose_target_label(
-            label_names=label_names,
-            probs=probs,
-            thresholds=thresholds,
-            label_arg=args.label,
-        )
-
-        # label이 class 0이 아닌 경우 실제 target label로 CAM 재계산
-        if target_idx != 0:
-            cam_out = gradcam.generate(tensor, class_idx=target_idx)
-            logits = cam_out.logits
-            cam = cam_out.cam
-            probs = logits_to_probs(logits)[0].detach().cpu().tolist()
-        else:
-            logits = initial_out.logits
-            cam = initial_out.cam
-
+        cam_out = gradcam.generate(tensor, class_idx=target_idx)
+        logits = cam_out.logits
+        cam = cam_out.cam
+        probs = logits_to_probs(logits)[0].detach().cpu().tolist()
     finally:
         gradcam.remove_hooks()
 
@@ -298,7 +291,7 @@ def main() -> None:
             positive_labels.append(label_name)
 
     cam_resized = resize_cam_to_image(cam, image_size=(original_rgb.shape[1], original_rgb.shape[0]))
-    heatmap_rgb = build_heatmap_rgb(cam_resized)
+    heatmap_rgb = build_heatmap_rgb(cam_resized, cmap_name="turbo")
     overlay_rgb = overlay_heatmap_on_image(
         image_rgb=original_rgb,
         cam_resized=cam_resized,

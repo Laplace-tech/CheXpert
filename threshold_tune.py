@@ -1,23 +1,24 @@
 from __future__ import annotations
 
-import argparse
-import csv
-import json
-from pathlib import Path
+import argparse          # CLI 인자 처리
+import csv               # study_predictions.csv 읽기 / tuning 결과 csv 저장
+import json              # json 저장
+from pathlib import Path # 파일 경로 다루기
 from typing import Any
 
-import numpy as np
+import numpy as np       # threshold grid / confusion count / metric 계산용
 
+# [연계: train_utils.py]
+# - base.yaml 로드용
 from chexpert_poc.utils.train_utils import load_config
 
-
+# F1: 양성을 잘 잡으면서도, 위양성은 없어야 함
+# balanced accuracy: 클래스 불균형이 심하고, 양성/음성 모두 어느 정도 공평하게 잘 맞춰야 함
+# recall: 놓침이 적다. 
 VALID_CRITERIA = {"f1", "balanced_accuracy", "recall"}
 
-
+# output_root/train_runs 아래에서 가장 최근의 eval/study_predictions.csv를 찾는다
 def find_latest_study_predictions_csv(output_root: str | Path) -> Path:
-    """
-    output_root/train_runs 아래에서 가장 최근의 eval/study_predictions.csv를 찾는다.
-    """
     output_root = Path(output_root)
     candidates = list(output_root.glob("train_runs/*/eval/study_predictions.csv"))
     if not candidates:
@@ -28,7 +29,7 @@ def find_latest_study_predictions_csv(output_root: str | Path) -> Path:
     candidates = sorted(candidates, key=lambda p: p.stat().st_mtime)
     return candidates[-1]
 
-
+# study_prediction.csv를 한 줄씩 읽어서 list[dict] 형태로 반환
 def load_prediction_rows(csv_path: str | Path) -> list[dict[str, str]]:
     csv_path = Path(csv_path)
 
@@ -46,10 +47,11 @@ def load_prediction_rows(csv_path: str | Path) -> list[dict[str, str]]:
 
     return rows
 
+# binary classification 기준 TP / TN / FP / FN
 
 def confusion_counts(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
+    y_true: np.ndarray, # y_true: 0/1 정답
+    y_pred: np.ndarray, # y_pred: 0/1 예측
 ) -> tuple[int, int, int, int]:
     y_true = np.asarray(y_true, dtype=np.int64)
     y_pred = np.asarray(y_pred, dtype=np.int64)
@@ -69,11 +71,11 @@ def safe_div(n: float, d: float) -> float:
         return 0.0
     return float(n / d)
 
-
+# threshold 하나에 대해 binary metric 계산
 def compute_binary_metrics(
-    y_true: np.ndarray,
-    y_prob: np.ndarray,
-    threshold: float,
+    y_true: np.ndarray, # 정답 벡터
+    y_prob: np.ndarray, # 확률 벡터
+    threshold: float,   # threshold
 ) -> dict[str, Any]:
     y_true = np.asarray(y_true, dtype=np.float32)
     y_prob = np.asarray(y_prob, dtype=np.float32)
@@ -84,6 +86,7 @@ def compute_binary_metrics(
     if y_true.ndim != 1:
         raise ValueError(f"Expected 1D arrays, got y_true.ndim={y_true.ndim}")
 
+    # y_true가 진짜 0/1 binary인지 검사
     unique = np.unique(y_true)
     allowed = {0.0, 1.0}
     for v in unique.tolist():
@@ -93,9 +96,13 @@ def compute_binary_metrics(
     if not (0.0 <= threshold <= 1.0):
         raise ValueError(f"threshold must be in [0,1], got {threshold}")
 
+    # 확률 -> 0/1 예측
     y_pred = (y_prob >= threshold).astype(np.int64)
+    
+    # confusion matrix
     tp, tn, fp, fn = confusion_counts(y_true, y_pred)
 
+    # 주요 metric 계산
     precision = safe_div(tp, tp + fp)
     recall = safe_div(tp, tp + fn)
     specificity = safe_div(tn, tn + fp)
@@ -122,11 +129,15 @@ def compute_binary_metrics(
     }
 
 
+# threshold 탐색 구간을 검증하고 실제 threshold 리스트를 생성
 def validate_threshold_grid(
     th_min: float,
     th_max: float,
     th_step: float,
 ) -> list[float]:
+    
+    # th_min=0.05, th_max=0.95, th_step=0.01
+    # -> [0.05, 0.06, 0.07, ..., 0.95]
     th_min = float(th_min)
     th_max = float(th_max)
     th_step = float(th_step)
@@ -148,12 +159,14 @@ def validate_threshold_grid(
 
     return thresholds
 
-
+# =====================================================
+# threshold 후보들을 쭉 돌면서 "최고 threshold" 하나 선택
+# =====================================================
 def choose_best_threshold(
-    y_true: np.ndarray,
-    y_prob: np.ndarray,
-    thresholds: list[float],
-    criterion: str = "f1",
+    y_true: np.ndarray,      # 해당 라벨의 정답 벡터
+    y_prob: np.ndarray,      # 해당 라벨의 확률 벡터
+    thresholds: list[float], # 탐색할 threshold 리스트
+    criterion: str = "f1",   # 무엇을 최대화할지 (F1 / balanced_accuracy / recall)
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if criterion not in VALID_CRITERIA:
         raise ValueError(f"Unsupported criterion: {criterion}")
