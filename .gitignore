@@ -26,8 +26,8 @@ checkpoints/
 logs/
 
 # Data (top-level only)
-#/data/         # 실제로 루트 data 폴더를 안 쓰면 주석 유지
-#/datasets/     # 실제로 루트 datasets 폴더를 안 쓰면 주석 유지
+data/
+# datasets/
 
 # Model / large binary artifacts
 *.pt
