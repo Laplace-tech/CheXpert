@@ -5,7 +5,6 @@ from typing import Any
 
 import yaml
 
-
 def get_section(config: dict, section: str) -> dict[str, Any]:
     section_value = config.get(section)
     if not isinstance(section_value, dict):

@@ -6,14 +6,12 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
 def validate_input_image(path: str | Path) -> Path:
     path = Path(path)
-
     if not path.exists():
         raise FileNotFoundError(f"Input image not found: {path}")
     if not path.is_file():
         raise ValueError(f"Input must be a file: {path}")
     if path.suffix.lower() not in IMAGE_EXTENSIONS:
         raise ValueError(f"Unsupported image extension: {path.suffix}")
-
     return path.resolve()
 
 

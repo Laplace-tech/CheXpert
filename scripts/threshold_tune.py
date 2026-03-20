@@ -1,23 +1,25 @@
 from __future__ import annotations
 
-import argparse          # CLI 인자 처리
-import csv               # study_predictions.csv 읽기 / tuning 결과 csv 저장
-import json              # json 저장
-from pathlib import Path # 파일 경로 다루기
+# eval.py가 만든 study_predictions.csv를 읽어서
+# 각 클래스별 최적 threshold를 고른다.
+
+import argparse
+import csv
+from pathlib import Path
+import sys
 from typing import Any
 
-import numpy as np       # threshold grid / confusion count / metric 계산용
+import numpy as np
 
-# [연계: train_utils.py]
-# - base.yaml 로드용
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from chexpert_poc.common.config import load_config
+from chexpert_poc.common.io import save_json
 
-# F1: 양성을 잘 잡으면서도, 위양성은 없어야 함
-# balanced accuracy: 클래스 불균형이 심하고, 양성/음성 모두 어느 정도 공평하게 잘 맞춰야 함
-# recall: 놓침이 적다. 
 VALID_CRITERIA = {"f1", "balanced_accuracy", "recall"}
 
-# output_root/train_runs 아래에서 가장 최근의 eval/study_predictions.csv를 찾는다
 def find_latest_study_predictions_csv(output_root: str | Path) -> Path:
     output_root = Path(output_root)
     candidates = list(output_root.glob("train_runs/*/eval/study_predictions.csv"))
@@ -29,7 +31,7 @@ def find_latest_study_predictions_csv(output_root: str | Path) -> Path:
     candidates = sorted(candidates, key=lambda p: p.stat().st_mtime)
     return candidates[-1]
 
-# study_prediction.csv를 한 줄씩 읽어서 list[dict] 형태로 반환
+
 def load_prediction_rows(csv_path: str | Path) -> list[dict[str, str]]:
     csv_path = Path(csv_path)
 
@@ -47,11 +49,19 @@ def load_prediction_rows(csv_path: str | Path) -> list[dict[str, str]]:
 
     return rows
 
-# binary classification 기준 TP / TN / FP / FN
+
+def validate_required_columns(rows: list[dict[str, str]], required_columns: list[str]) -> None:
+    if not rows:
+        raise RuntimeError("Prediction rows are empty")
+
+    missing = [c for c in required_columns if c not in rows[0]]
+    if missing:
+        raise KeyError(f"Missing required columns: {missing}")
+
 
 def confusion_counts(
-    y_true: np.ndarray, # y_true: 0/1 정답
-    y_pred: np.ndarray, # y_pred: 0/1 예측
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
 ) -> tuple[int, int, int, int]:
     y_true = np.asarray(y_true, dtype=np.int64)
     y_pred = np.asarray(y_pred, dtype=np.int64)
@@ -71,11 +81,11 @@ def safe_div(n: float, d: float) -> float:
         return 0.0
     return float(n / d)
 
-# threshold 하나에 대해 binary metric 계산
+
 def compute_binary_metrics(
-    y_true: np.ndarray, # 정답 벡터
-    y_prob: np.ndarray, # 확률 벡터
-    threshold: float,   # threshold
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    threshold: float,
 ) -> dict[str, Any]:
     y_true = np.asarray(y_true, dtype=np.float32)
     y_prob = np.asarray(y_prob, dtype=np.float32)
@@ -86,7 +96,6 @@ def compute_binary_metrics(
     if y_true.ndim != 1:
         raise ValueError(f"Expected 1D arrays, got y_true.ndim={y_true.ndim}")
 
-    # y_true가 진짜 0/1 binary인지 검사
     unique = np.unique(y_true)
     allowed = {0.0, 1.0}
     for v in unique.tolist():
@@ -96,13 +105,9 @@ def compute_binary_metrics(
     if not (0.0 <= threshold <= 1.0):
         raise ValueError(f"threshold must be in [0,1], got {threshold}")
 
-    # 확률 -> 0/1 예측
     y_pred = (y_prob >= threshold).astype(np.int64)
-    
-    # confusion matrix
     tp, tn, fp, fn = confusion_counts(y_true, y_pred)
 
-    # 주요 metric 계산
     precision = safe_div(tp, tp + fp)
     recall = safe_div(tp, tp + fn)
     specificity = safe_div(tn, tn + fp)
@@ -129,15 +134,11 @@ def compute_binary_metrics(
     }
 
 
-# threshold 탐색 구간을 검증하고 실제 threshold 리스트를 생성
 def validate_threshold_grid(
     th_min: float,
     th_max: float,
     th_step: float,
 ) -> list[float]:
-    
-    # th_min=0.05, th_max=0.95, th_step=0.01
-    # -> [0.05, 0.06, 0.07, ..., 0.95]
     th_min = float(th_min)
     th_max = float(th_max)
     th_step = float(th_step)
@@ -159,14 +160,12 @@ def validate_threshold_grid(
 
     return thresholds
 
-# =====================================================
-# threshold 후보들을 쭉 돌면서 "최고 threshold" 하나 선택
-# =====================================================
+
 def choose_best_threshold(
-    y_true: np.ndarray,      # 해당 라벨의 정답 벡터
-    y_prob: np.ndarray,      # 해당 라벨의 확률 벡터
-    thresholds: list[float], # 탐색할 threshold 리스트
-    criterion: str = "f1",   # 무엇을 최대화할지 (F1 / balanced_accuracy / recall)
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    thresholds: list[float],
+    criterion: str = "f1",
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if criterion not in VALID_CRITERIA:
         raise ValueError(f"Unsupported criterion: {criterion}")
@@ -198,14 +197,6 @@ def choose_best_threshold(
     return best_row, all_rows
 
 
-def save_json(data: Any, path: str | Path) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
 def save_threshold_grid_csv(rows: list[dict[str, Any]], path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -220,6 +211,37 @@ def save_threshold_grid_csv(rows: list[dict[str, Any]], path: str | Path) -> Non
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def build_infer_thresholds_payload(
+    *,
+    criterion: str,
+    recommended_thresholds: list[float],
+    label_names: list[str],
+    pred_csv_path: Path,
+    th_min: float,
+    th_max: float,
+    th_step: float,
+) -> dict[str, Any]:
+    threshold_string = ",".join(f"{x:.2f}" for x in recommended_thresholds)
+
+    return {
+        "criterion": criterion,
+        "thresholds": recommended_thresholds,
+        "thresholds_str_for_infer": threshold_string,
+        "labels": label_names,
+        "prediction_csv": str(pred_csv_path),
+        "threshold_grid": {
+            "th_min": float(th_min),
+            "th_max": float(th_max),
+            "th_step": float(th_step),
+        },
+        "warning": (
+            "These thresholds are tuned on the same validation predictions used "
+            "to measure performance. Treat them as validation-tuned operating points, "
+            "not unbiased generalization estimates."
+        ),
+    }
 
 
 def main() -> None:
@@ -260,8 +282,7 @@ def main() -> None:
         th_step=args.th_step,
     )
 
-    eval_dir = pred_csv_path.parent
-    output_dir = eval_dir / "threshold_tuning"
+    output_dir = pred_csv_path.parent / "threshold_tuning"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 100)
@@ -281,8 +302,7 @@ def main() -> None:
         prob_col = f"{label}_prob"
         mask_col = f"{label}_mask"
 
-        if target_col not in rows[0] or prob_col not in rows[0] or mask_col not in rows[0]:
-            raise KeyError(f"Missing required columns for label={label}")
+        validate_required_columns(rows, [target_col, prob_col, mask_col])
 
         y_true = np.asarray([float(r[target_col]) for r in rows], dtype=np.float32)
         y_prob = np.asarray([float(r[prob_col]) for r in rows], dtype=np.float32)
@@ -337,28 +357,16 @@ def main() -> None:
     save_threshold_grid_csv(best_summary, output_dir / "best_thresholds_by_class.csv")
     save_threshold_grid_csv(all_grid_rows, output_dir / "threshold_grid_metrics.csv")
 
-    threshold_string = ",".join(f"{x:.2f}" for x in recommended_thresholds)
-
-    save_json(
-        {
-            "criterion": args.criterion,
-            "thresholds": recommended_thresholds,
-            "thresholds_str_for_infer": threshold_string,
-            "labels": label_names,
-            "prediction_csv": str(pred_csv_path),
-            "threshold_grid": {
-                "th_min": float(args.th_min),
-                "th_max": float(args.th_max),
-                "th_step": float(args.th_step),
-            },
-            "warning": (
-                "These thresholds are tuned on the same validation predictions used "
-                "to measure performance. Treat them as validation-tuned operating points, "
-                "not unbiased generalization estimates."
-            ),
-        },
-        output_dir / "infer_thresholds.json",
+    infer_thresholds_payload = build_infer_thresholds_payload(
+        criterion=args.criterion,
+        recommended_thresholds=recommended_thresholds,
+        label_names=label_names,
+        pred_csv_path=pred_csv_path,
+        th_min=args.th_min,
+        th_max=args.th_max,
+        th_step=args.th_step,
     )
+    save_json(infer_thresholds_payload, output_dir / "infer_thresholds.json")
 
     print("\n[best thresholds]")
     print(
@@ -377,7 +385,7 @@ def main() -> None:
         )
 
     print("\n[recommended --thresholds string for infer.py]")
-    print(threshold_string)
+    print(infer_thresholds_payload["thresholds_str_for_infer"])
 
     print("\nartifacts saved to:")
     print(output_dir)

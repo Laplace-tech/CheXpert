@@ -1,30 +1,23 @@
-# cd /home/anna/projects/chexpert_poc
-# source .venv/bin/activate
-# export PYTHONPATH=/home/anna/projects/chexpert_poc
-
-# python scripts/check_dataset.py --config configs/base.yaml
-
 from __future__ import annotations
 
 import argparse
-import os
+import sys
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-import yaml
-from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from chexpert_poc.common.config import load_config
 
 
-# YAML 설정 파일을 읽어서 파이썬 dict로 바꾼다 (main 에서 호출)
-def load_config(config_path: str) -> dict:
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-# CSV에 들어있는 Path 문자열을 로컬 환경에서 실제 존재하는 이미지 파일 경로로 변환
 def resolve_image_path(raw_root: Path, csv_path_value: str) -> Optional[Path]:
-    
-    # 빈 문자열 처리
+    """
+    CSV에 들어있는 Path 문자열을 로컬 환경에서 실제 존재하는 이미지 파일 경로로 변환한다.
+    """
     if pd.isna(csv_path_value):
         return None
 
@@ -32,14 +25,13 @@ def resolve_image_path(raw_root: Path, csv_path_value: str) -> Optional[Path]:
     if not p:
         return None
 
-    # 원본 문자열 path를 객체화
     original = Path(p)
-    candidates = []
+    candidates: list[Path] = []
 
     if original.is_absolute():
-        candidates.append(original)  # 절대경로 그대로
+        candidates.append(original)
 
-    candidates.append(raw_root / p)  # raw_root에 바로 붙이기
+    candidates.append(raw_root / p)
 
     stripped = p
     for prefix in ("CheXpert-v1.0-small/", "CheXpert-v1.0/", "./"):
@@ -47,10 +39,10 @@ def resolve_image_path(raw_root: Path, csv_path_value: str) -> Optional[Path]:
             stripped = stripped[len(prefix):]
     stripped = stripped.lstrip("/")
 
-    candidates.append(raw_root / stripped)         # prefix 제거 후 raw_root 기준
-    candidates.append(raw_root.parent / p)         # raw_root 부모 기준
-    candidates.append(raw_root.parent / stripped)  # 부모 + prefix 제거
-    candidates.append(raw_root / Path(p).name)     # 마지막 fallback: 파일명만 사용
+    candidates.append(raw_root / stripped)
+    candidates.append(raw_root.parent / p)
+    candidates.append(raw_root.parent / stripped)
+    candidates.append(raw_root / Path(p).name)
 
     for cand in candidates:
         if cand.exists():
@@ -59,8 +51,10 @@ def resolve_image_path(raw_root: Path, csv_path_value: str) -> Optional[Path]:
     return None
 
 
-# 하나의 라벨에 대해 값 분포를 카운팅 ( 1 / 0 / -1 / NaN )
-def summarize_label(df: pd.DataFrame, label: str) -> dict:
+def summarize_label(df: pd.DataFrame, label: str) -> dict[str, int]:
+    """
+    하나의 라벨에 대해 값 분포를 카운팅한다. (1 / 0 / -1 / NaN)
+    """
     s = pd.to_numeric(df[label], errors="coerce")
     return {
         "pos_1": int((s == 1).sum()),
@@ -79,8 +73,6 @@ def inspect_split(
     sample_size: int,
     full_path_check: bool,
 ) -> None:
-    
-    # train / valid 한 split에 대해 CSV, 라벨, 경로를 점검
     print("\n" + "=" * 80)
     print(f"[{split_name}] CSV: {csv_path}")
     print("=" * 80)
@@ -107,7 +99,6 @@ def inspect_split(
             f"NaN: {stats['nan']:7d}"
         )
 
-    # 경로 검사는 전체 또는 샘플만 수행
     if full_path_check or len(df) <= sample_size:
         check_df = df.copy()
         check_mode = "FULL"
@@ -118,8 +109,8 @@ def inspect_split(
     print(f"\n[path check: {check_mode}]")
 
     resolved = 0
-    unresolved_examples = []
-    resolved_examples = []
+    unresolved_examples: list[str] = []
+    resolved_examples: list[tuple[str, str]] = []
 
     for _, row in check_df.iterrows():
         raw_path_value = row[path_column]
@@ -128,7 +119,7 @@ def inspect_split(
         if resolved_path is not None and resolved_path.exists():
             resolved += 1
             if len(resolved_examples) < 5:
-                resolved_examples.append((raw_path_value, str(resolved_path)))
+                resolved_examples.append((str(raw_path_value), str(resolved_path)))
         else:
             if len(unresolved_examples) < 5:
                 unresolved_examples.append(str(raw_path_value))
@@ -155,21 +146,17 @@ def inspect_split(
     print(df[preview_cols].head(3).to_string(index=False))
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="configs/base.yaml")
     parser.add_argument("--sample-size", type=int, default=256)
     parser.add_argument("--full-path-check", action="store_true")
     args = parser.parse_args()
 
-    load_dotenv()
-
     config = load_config(args.config)
-    raw_root = Path(
-        os.environ.get("CHEXPERT_ROOT", config["paths"]["chexpert_root"])
-    ).expanduser()
-    path_column = config["data"]["path_column"]
-    target_labels = config["data"]["target_labels"]
+    raw_root = Path(config["paths"]["chexpert_root"])
+    path_column = str(config["data"]["path_column"])
+    target_labels = list(config["data"]["target_labels"])
 
     print("=" * 80)
     print("CheXpert dataset check")

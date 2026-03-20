@@ -1,31 +1,38 @@
 from __future__ import annotations
 
+import argparse
+import sys
 from pathlib import Path
 
 import pandas as pd
 import torch
-from dotenv import load_dotenv
 
-from chexpert_poc.utils.train_utils import create_dataloaders, load_config
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-# Dataset 객체 자체가 기대한 상태인지 확인 (train.csv, valid.csv)
+from chexpert_poc.common.config import load_config
+from chexpert_poc.training.data import create_dataloaders
+
+
 def describe_dataset(name: str, dataset) -> None:
-  
+    """
+    Dataset 객체 자체가 기대한 상태인지 확인한다.
+    """
     print("\n" + "=" * 80)
     print(f"{name} dataset summary")
     print("=" * 80)
 
-    # 원본 CSV row 수 확인
     raw_rows = "unknown"
     if hasattr(dataset, "csv_path") and Path(dataset.csv_path).exists():
         raw_rows = f"{len(pd.read_csv(dataset.csv_path)):,}"
 
-    print(f"csv_path: {dataset.csv_path}")                          # /home/anna/datasets/cxr/chexpert_small/raw/train.csv
-    print(f"raw_csv_rows: {raw_rows}")                              # 223,414
-    print(f"usable_dataset_rows: {len(dataset):,}")                 # 191,027
-    print(f"view_mode: {dataset.view_mode}")                        # frontal_only
-    print(f"uncertainty_strategy: {dataset.uncertainty_strategy}")  # U-Ignore
-    print(f"target_labels: {dataset.target_labels}")                # ['Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema', 'Pleural Effusion']
+    print(f"csv_path: {dataset.csv_path}")
+    print(f"raw_csv_rows: {raw_rows}")
+    print(f"usable_dataset_rows: {len(dataset):,}")
+    print(f"view_mode: {dataset.view_mode}")
+    print(f"uncertainty_strategy: {dataset.uncertainty_strategy}")
+    print(f"target_labels: {dataset.target_labels}")
 
     if len(dataset) == 0:
         print("[ERROR] dataset is empty")
@@ -33,17 +40,19 @@ def describe_dataset(name: str, dataset) -> None:
 
     sample = dataset[0]
     print("\n[first sample]")
-    print(f"sample keys: {list(sample.keys())}")                    # ['image', 'label', 'loss_mask', 'path', 'resolved_path', 'study_id']
-    print(f"sample image shape: {tuple(sample['image'].shape)}")    # (3, 320, 320)
-    print(f"sample label: {sample['label'].tolist()}")              # [0.0, 0.0, 0.0, 0.0, 0.0]
-    print(f"sample loss_mask: {sample['loss_mask'].tolist()}")      # [1.0, 1.0, 1.0, 1.0, 1.0]
-    print(f"sample path: {sample['path']}")                         # CheXpert-v1.0-small/train/patient00001/study1/view1_frontal.jpg
-    print(f"sample resolved_path: {sample['resolved_path']}")       # /home/anna/datasets/cxr/chexpert_small/raw/train/patient00001/study1/view1_frontal.jpg
-    print(f"sample study_id: {sample['study_id']}")                 # patient00001/study1
+    print(f"sample keys: {list(sample.keys())}")
+    print(f"sample image shape: {tuple(sample['image'].shape)}")
+    print(f"sample label: {sample['label'].tolist()}")
+    print(f"sample loss_mask: {sample['loss_mask'].tolist()}")
+    print(f"sample path: {sample['path']}")
+    print(f"sample resolved_path: {sample['resolved_path']}")
+    print(f"sample study_id: {sample['study_id']}")
 
 
 def inspect_batch(name: str, loader) -> None:
-    # DataLoader가 실제 학습 가능한 batch를 뽑는지 확인
+    """
+    DataLoader가 실제 학습 가능한 batch를 뽑는지 확인한다.
+    """
     print("\n" + "=" * 80)
     print(f"{name} batch summary")
     print("=" * 80)
@@ -56,12 +65,12 @@ def inspect_batch(name: str, loader) -> None:
     paths = batch["path"]
     study_ids = batch["study_id"]
 
-    print(f"images.shape: {tuple(images.shape)}")           # (32, 3, 320, 320)
-    print(f"labels.shape: {tuple(labels.shape)}")           # (32, 5)
-    print(f"loss_masks.shape: {tuple(loss_masks.shape)}")   # (32, 5)
-    print(f"images.dtype: {images.dtype}")                  # torch.float32
-    print(f"labels.dtype: {labels.dtype}")                  # torch.float32
-    print(f"loss_masks.dtype: {loss_masks.dtype}")          # torch.float32
+    print(f"images.shape: {tuple(images.shape)}")
+    print(f"labels.shape: {tuple(labels.shape)}")
+    print(f"loss_masks.shape: {tuple(loss_masks.shape)}")
+    print(f"images.dtype: {images.dtype}")
+    print(f"labels.dtype: {labels.dtype}")
+    print(f"loss_masks.dtype: {loss_masks.dtype}")
 
     print("\n[first 3 labels]")
     for i in range(min(3, labels.shape[0])):
@@ -86,14 +95,15 @@ def inspect_batch(name: str, loader) -> None:
     print(f"loss_masks only in {{0,1}}: {bool(valid_mask_values.all())}")
 
     ignored_count = int((loss_masks == 0).sum().item())
-    print(f"num_masked_entries_in_batch: {ignored_count}")  # U-Ignore로 빠진 라벨 수
+    print(f"num_masked_entries_in_batch: {ignored_count}")
 
 
-def main():
-    load_dotenv()
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default="configs/base.yaml")
+    args = parser.parse_args()
 
-    config_path = "configs/base.yaml"
-    config = load_config(config_path)
+    config = load_config(args.config)
 
     train_loader, valid_loader = create_dataloaders(config=config)
 

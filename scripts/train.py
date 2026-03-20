@@ -1,51 +1,47 @@
-# cd /home/anna/projects/chexpert_poc
-# source .venv/bin/activate
-# export PYTHONPATH=/home/anna/projects/chexpert_poc
-#
-# python scripts/check_dataset.py --config configs/base.yaml --sample-size 32
-# python scripts/sanity_dataloader.py
-# python train.py --config configs/base.yaml
-# python eval.py --config configs/base.yaml
-# python threshold_tune.py --config configs/base.yaml --criterion f1
-# python error_analysis.py --config configs/base.yaml
-
 from __future__ import annotations
 
-import argparse
-import csv
-import time
-from contextlib import nullcontext
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Sequence
+import argparse  # --config 같은 CLI 인자 받기
+import csv  # history.csv 저장
+import sys
+import time  # epoch 시간 측정
+from contextlib import nullcontext  # AMP 안 쓸 때 autocast 대신 빈 context로 사용
+from datetime import datetime  # run_YYYYmmdd_HHMMSS 형태 실험 디렉토리 이름 만들기
+from pathlib import Path  # 경로 처리
+from typing import Any  # config / history row 같은 느슨한 dict 타입 처리
 
-import torch
-from dotenv import load_dotenv
-from tqdm import tqdm
+import torch  # PyTorch 핵심
+from tqdm import tqdm  # progress bar 출력
 
-# 모델 구조 생성 담당: DenseNet121 backbone + 마지막 classifier 교체
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from chexpert_poc.common.config import get_config_bool, get_section, load_config
+from chexpert_poc.common.io import ensure_dir, save_json, save_checkpoint
+from chexpert_poc.common.runtime import get_device, set_seed
+from chexpert_poc.common.model_config import resolve_num_classes
+
+# 모델 구조 생성 담당
+# 최종적으로 DenseNet121 backbone + classifier(num_classes) 구성
 from chexpert_poc.models.densenet import build_densenet121
 
-# train dataset 기준 각 병변 라벨별로 pos_weight 계산
-# 콘솔 출력용 포맷 문자열 생성
-from chexpert_poc.utils.class_weights import (
+# train dataset 기준 양성/음성 불균형을 계산한 뒤,
+# BCEWithLogitsLoss의 pos_weight용 tensor 생성
+# 그리고 그 통계 문자열 출력 포맷 생성
+from chexpert_poc.training.class_weights import (
     compute_pos_weight_from_dataset,
     format_pos_weight_stats,
 )
 
-# 모델 logits + dataset label / loss mask를 실제 학습 손실로 계산
-from chexpert_poc.utils.losses import masked_bce_with_logits
+# logits, targets, loss_mask, pos_weight 받아서 실제 multi-label BCE loss 계산
+# uncertainty masking 반영되는 핵심 손실 함수
+from chexpert_poc.training.losses import masked_bce_with_logits
 
-# config 로드 / dataloader 생성 / optimizer 생성 / 저장 유틸
-from chexpert_poc.utils.train_utils import (
-    build_optimizer,
-    create_dataloaders,
-)
+# optimizer 생성 로직
+from chexpert_poc.training.optim import build_optimizer
 
-from chexpert_poc.common.config import get_config_bool, get_section, load_config
-from chexpert_poc.common.io import ensure_dir, save_json
-from chexpert_poc.common.runtime import get_device
-
+# train/valid dataloader 생성 로직
+from chexpert_poc.training.data import create_dataloaders
 
 
 # 로그 출력용: 3721초 -> "1h 02m 01s"
@@ -66,11 +62,14 @@ def count_trainable_parameters(model: torch.nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
+# CUDA는 비동기 실행이므로 시간 측정 직전/직후에 synchronize 안 하면
+# 실제보다 시간이 짧게 찍힐 수 있음
 def cuda_synchronize(device: torch.device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize(device)
 
 
+# epoch 동안 최대 GPU 메모리 사용량(MB) 조회
 def get_peak_gpu_memory_mb(device: torch.device) -> float:
     if device.type != "cuda":
         return 0.0
@@ -127,67 +126,6 @@ def save_history_csv(history: list[dict[str, Any]], path: str | Path) -> None:
         writer.writerows(history)
 
 
-# ---------------------------------------------------------
-# 안전한 config access helper
-# ---------------------------------------------------------
-
-def require_bool(name: str, value: Any) -> bool:
-    # 문자열 "false" 같은 걸 bool(...)로 잘못 True 처리하지 않도록
-    # 진짜 bool만 허용
-    if isinstance(value, bool):
-        return value
-    raise TypeError(f"{name} must be bool, got {type(value).__name__}: {value!r}")
-
-
-def get_section(config: dict, section: str) -> dict[str, Any]:
-    value = config.get(section)
-    if not isinstance(value, dict):
-        raise TypeError(f"config['{section}'] must be dict, got {type(value).__name__}")
-    return value
-
-
-def get_config_bool(
-    config: dict,
-    section: str,
-    key: str,
-    default: bool | None = None,
-) -> bool:
-    section_dict = get_section(config, section)
-
-    if key in section_dict:
-        return require_bool(f"{section}.{key}", section_dict[key])
-
-    if default is not None:
-        return default
-
-    raise KeyError(f"Missing required bool config: {section}.{key}")
-
-
-def resolve_num_classes(config: dict) -> int:
-    # num_classes의 단일 source of truth를 data.target_labels 길이로 맞춤
-    data_cfg = get_section(config, "data")
-    model_cfg = get_section(config, "model")
-
-    target_labels = data_cfg.get("target_labels")
-    if not isinstance(target_labels, Sequence) or isinstance(target_labels, (str, bytes)):
-        raise TypeError("data.target_labels must be a non-string sequence")
-    if len(target_labels) == 0:
-        raise ValueError("data.target_labels must not be empty")
-
-    derived_num_classes = len(target_labels)
-
-    # model.num_classes가 있으면 일치 여부만 검증
-    if "num_classes" in model_cfg:
-        configured_num_classes = int(model_cfg["num_classes"])
-        if configured_num_classes != derived_num_classes:
-            raise ValueError(
-                "model.num_classes does not match len(data.target_labels): "
-                f"{configured_num_classes} vs {derived_num_classes}"
-            )
-
-    return derived_num_classes
-
-
 def maybe_enable_cudnn_benchmark(config: dict) -> None:
     use_benchmark = get_config_bool(config, "train", "cudnn_benchmark", default=False)
     if torch.cuda.is_available():
@@ -228,7 +166,9 @@ def build_epoch_record(
         "valid_peak_gpu_memory_mb": valid_result["peak_gpu_memory_mb"],
         "train_valid_label_count": train_result["valid_label_count"],
         "valid_valid_label_count": valid_result["valid_label_count"],
-        "best_valid_loss_so_far": min(best_valid_loss_before_update, valid_result["loss"]),
+        "best_valid_loss_so_far": min(
+            best_valid_loss_before_update, valid_result["loss"]
+        ),
         "lr": lr,
     }
 
@@ -256,31 +196,38 @@ def build_checkpoint_payload(
 # - image -> model -> logits
 # - logits + label + loss_mask + pos_weight -> masked_bce_with_logits
 def train_one_epoch(
-    model: torch.nn.Module,
-    loader,
-    optimizer: torch.optim.Optimizer,
-    device: torch.device,
-    scaler: torch.amp.GradScaler,
-    pos_weight: torch.Tensor | None,
-    use_amp: bool,
-    channels_last: bool,
-    max_grad_norm: float | None,
-    epoch: int,
-    num_epochs: int,
+    model: torch.nn.Module,  # 학습할 모델
+    loader,  # train dataloader
+    optimizer: torch.optim.Optimizer,  # Adam / Adamw 등
+    device: torch.device,  # cpu 또는 cuda
+    scaler: torch.amp.GradScaler,  # AMP gradient scaler
+    pos_weight: torch.Tensor | None,  # 클래스 불균형 보정용 tensor
+    use_amp: bool,  # autocast 사용 여부
+    channels_last: bool,  # 이미지 텐서를 channels_last로 보낼지 여부
+    max_grad_norm: float | None,  # gradient clipping 값 또는 None
+    epoch: int,  # 현재 epoch 번호
+    num_epochs: int,  # 전체 epoch 수
 ) -> dict[str, Any]:
     model.train()
 
-    total_loss_sum = 0.0
-    total_valid_count = 0.0
-    total_images = 0
-    total_batches = 0
+    # epoch 전체 통계 누적용 변수
+    total_loss_sum = 0.0  # reduction="sum" 기준 누적 손실ㄹ
+    total_valid_count = (
+        0.0  # 실제 loss에 반영된 "유효 라벨 수" (uncertainty mask 제외시켜야 함)
+    )
+    total_images = 0  # 처리한 이미지 수
+    total_batches = 0  # 처리한 배치 수
 
+    # GPU 메모리: 이번 epoch의 peak memory 측정을 새로 시작
     if device.type == "cuda":
+        # 이번 epoch의 peak memory 측정을 새로 시작
         torch.cuda.reset_peak_memory_stats(device)
 
+    # 시간 초기화: time 측정 정확도 위해 synchronize 후 시작
     cuda_synchronize(device)
     start_time = time.perf_counter()
 
+    # progress bar 생성
     pbar = tqdm(
         loader,
         desc=f"train {epoch:02d}/{num_epochs:02d}",
@@ -289,10 +236,13 @@ def train_one_epoch(
     )
 
     for batch_idx, batch in enumerate(pbar, start=1):
-        images = move_tensor(batch["image"], device=device, channels_last=channels_last)
+        images = move_tensor(
+            batch["image"], device=device, channels_last=channels_last
+        )  # 뭔 개소리지
         labels = move_tensor(batch["label"], device=device)
         loss_mask = move_tensor(batch["loss_mask"], device=device)
 
+        # gradient 초기화
         optimizer.zero_grad(set_to_none=True)
 
         with get_autocast_context(device=device, use_amp=use_amp):
@@ -300,15 +250,15 @@ def train_one_epoch(
             # - 출력은 sigmoid 없는 raw logits [B, C]
             logits = model(images)
 
-            # [losses.py]
-            # - BCEWithLogits 계산
-            # - loss_mask==0 는 제외
-            # - pos_weight 있으면 양성 오차를 더 크게 반영
+            # [losses.py]: 손실 계산 철학
+            # 1) multi-label BCE 사용
+            # 2) uncertainty는 loss_mask로 제외 가능
+            # 3) 불균형 클래스는 pos_weight로 양성 오차를 더 크게 반영
             loss_sum = masked_bce_with_logits(
-                logits=logits,
-                targets=labels,
-                loss_mask=loss_mask,
-                pos_weight=pos_weight,
+                logits=logits,  # 모델 출력 raw logits
+                targets=labels,  # 정답 라벨
+                loss_mask=loss_mask,  # uncertain label 무시용 마스크
+                pos_weight=pos_weight,  # 양성 희소 클래스 가중치
                 reduction="sum",
             )
 
@@ -316,12 +266,14 @@ def train_one_epoch(
             valid_count = loss_mask.sum().clamp_min(1.0)
             loss = loss_sum / valid_count
 
+        # NaN / Inf 손실 발생 시 즉시 중단
         if not torch.isfinite(loss).all():
             raise RuntimeError(
                 f"Non-finite train loss detected at epoch={epoch}, batch={batch_idx}. "
                 f"loss={float(loss.detach().item())}"
             )
 
+        # backward + gradient clipping + optimizer step
         scaler.scale(loss).backward()
 
         if max_grad_norm is not None:
@@ -331,12 +283,16 @@ def train_one_epoch(
         scaler.step(optimizer)
         scaler.update()
 
+        # epoch 전체 통계 누적
+        # 주의: loss가 아니라 loss_sum을 누적한 뒤
+        # 마지막에 total_valid_count로 나눔
         batch_size = int(images.shape[0])
         total_images += batch_size
         total_batches += 1
         total_loss_sum += float(loss_sum.detach().item())
         total_valid_count += float(loss_mask.sum().detach().item())
 
+        # running loss 표시
         running_loss = total_loss_sum / max(total_valid_count, 1.0)
         pbar.set_postfix(
             loss=f"{running_loss:.4f}",
@@ -344,6 +300,7 @@ def train_one_epoch(
             lr=f"{optimizer.param_groups[0]['lr']:.2e}",
         )
 
+    # epoch 종료 후 정리
     cuda_synchronize(device)
     elapsed = time.perf_counter() - start_time
     epoch_loss = total_loss_sum / max(total_valid_count, 1.0)
@@ -438,37 +395,49 @@ def validate_one_epoch(
 
 
 def main() -> None:
+
+    # 실행 예: python train.py --config configs/base.yaml
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="configs/base.yaml")
     args = parser.parse_args()
 
-    load_dotenv()
+    config = load_config(args.config)  # yaml config 로드
+    set_seed(int(config["project"]["seed"]))  # 랜덤 시드 고정
+    maybe_enable_cudnn_benchmark(config)  # cudnn benchmark 설정
+    maybe_set_matmul_precision(config)  # matmul precision 설정
 
-    config = load_config(args.config)
-    set_seed(int(config["project"]["seed"]))
-    maybe_enable_cudnn_benchmark(config)
-    maybe_set_matmul_precision(config)
-
-    # bool(...) 캐스팅 제거: 진짜 bool만 허용
+    # device         : cuda 있으면 cuda, 없으면 cpu
+    # requested_amp  : 사용자가 config에서 원한 AMP 사용 여부
+    # effective_amp  : 실제로 적용 가능한 AMP 여부 (cuda일 때만 True)
+    # channels_last  : image tensor를 channels_last 포맷으로 보낼지
+    # use_pos_weight : pos_weight 계산/사용 여부
+    # max_grad_norm  : gradient clipping 값
     device = get_device()
     requested_amp = get_config_bool(config, "train", "amp", default=True)
     effective_amp = requested_amp and device.type == "cuda"
     channels_last = get_config_bool(config, "train", "channels_last", default=True)
     use_pos_weight = get_config_bool(config, "train", "use_pos_weight", default=True)
-    max_grad_norm = validate_max_grad_norm(get_section(config, "train").get("max_grad_norm", None))
+    max_grad_norm = validate_max_grad_norm(
+        get_section(config, "train").get("max_grad_norm", None)
+    )
 
-    # num_classes 단일 source of truth = len(data.target_labels)
+    # data.target_labels 길이 기준으로 num_classes 계산
     num_classes = resolve_num_classes(config)
 
+    # 예:
+    # outputs/train_runs/run_20260320_185145/
+    # outputs/train_runs/run_20260320_185145/checkpoints/
     run_name = datetime.now().strftime("run_%Y%m%d_%H%M%S")
     run_dir = ensure_dir(Path(config["paths"]["output_root"]) / "train_runs" / run_name)
     checkpoint_dir = ensure_dir(run_dir / "checkpoints")
 
+    # train/valid dataset 및 dataloader 생성
     train_loader, valid_loader = create_dataloaders(config=config)
 
     train_dataset_stats = getattr(train_loader.dataset, "dataset_stats", None)
     valid_dataset_stats = getattr(valid_loader.dataset, "dataset_stats", None)
 
+    # pos_weight 계산 (train dataset 기준으로)
     pos_weight = None
     pos_weight_stats = None
     if use_pos_weight:
@@ -478,13 +447,15 @@ def main() -> None:
         )
         pos_weight = pos_weight.to(device)
 
+    # 모델 생성: DenseNet121
     pretrained = get_config_bool(config, "model", "pretrained", default=True)
-
     model = build_densenet121(
-        num_classes=num_classes,
-        pretrained=pretrained,
+        num_classes=num_classes,  # classifier 출력 차원 = num_classes
+        pretrained=pretrained,    # pretrained 여부는 config로 제어
     )
 
+    # 모델도 channels_last memory format으로 맞춤
+    # 이후에 device로 이동
     if channels_last:
         model = model.to(memory_format=torch.channels_last)
     model = model.to(device)
@@ -492,6 +463,7 @@ def main() -> None:
     optimizer = build_optimizer(model=model, config=config)
     scaler = make_grad_scaler(device=device, use_amp=requested_amp)
 
+    # 필수 학습 epoch 수 검증
     num_epochs = int(config["train"]["epochs"])
     if num_epochs <= 0:
         raise ValueError(f"train.epochs must be > 0, got {num_epochs}")
@@ -510,6 +482,7 @@ def main() -> None:
         "channels_last": channels_last,
     }
 
+    # 각종 artifact 저장: 이번 run의 설정과 데이터셋 / 모델 통계
     save_json(config, run_dir / "config_snapshot.json")
     save_json(model_info, run_dir / "model_info.json")
     if train_dataset_stats is not None:

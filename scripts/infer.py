@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 from pathlib import Path
+import sys
 from typing import Any
 
-from dotenv import load_dotenv
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from chexpert_poc.common.config import get_config_bool, get_section, load_config
 from chexpert_poc.common.io import ensure_dir, save_json
@@ -186,8 +189,6 @@ def run_inference_pipeline(
 # =========================================================
 
 def main() -> None:
-    load_dotenv()
-
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--input",

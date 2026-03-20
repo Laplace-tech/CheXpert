@@ -9,8 +9,8 @@ from torchvision.models import DenseNet121_Weights, densenet121
 #  1. num_classes(최종 출력 클래스 수):
 #  2. ImageNet pretrained weights 사용 여부:
 def build_densenet121(
-    num_classes: int = 5,    # num_classes=int(config["model"]["num_classes"])
-    pretrained: bool = True, # pretrained=bool(config["model"]["pretrained"])
+    num_classes: int = 5,   
+    pretrained: bool = True, 
 ) -> nn.Module:
     """
     동작:

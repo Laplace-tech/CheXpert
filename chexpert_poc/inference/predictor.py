@@ -71,7 +71,13 @@ def predict_one_image(
 
     # model 출력은 raw logits [1, C]
     logits = model(tensor)
-
+    
+    """
+    Logits를 멀티라벨 확률로 변환한다.
+    - model은 sigmoid 미적용된 raw logits를 출력한다.
+    - eval/infer 시에는 획률이 필요하므로 sigmoid가 적용됨.
+    - 다중 분류가 아니라 이진 멀티라벨 분류이므로 각 클래스가 독립적으로 0~1 확률을 가짐.
+    """
     # sigmoid 적용해서 확률 [C]로 변환
     probs = torch.sigmoid(logits)[0].detach().cpu().tolist()
 

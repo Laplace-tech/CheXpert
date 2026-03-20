@@ -80,7 +80,15 @@ def predict_probs(
     model: torch.nn.Module,
     tensor: torch.Tensor,
 ) -> list[float]:
+    
     logits = model(tensor)
+    
+    """
+    Logits를 멀티라벨 확률로 변환한다.
+    - model은 sigmoid 미적용된 raw logits를 출력한다.
+    - eval/infer 시에는 획률이 필요하므로 sigmoid가 적용됨.
+    - 다중 분류가 아니라 이진 멀티라벨 분류이므로 각 클래스가 독립적으로 0~1 확률을 가짐.
+    """
     return torch.sigmoid(logits)[0].detach().cpu().tolist()
 
 

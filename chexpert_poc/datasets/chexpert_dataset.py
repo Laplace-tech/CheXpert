@@ -11,7 +11,7 @@ from torchvision import transforms   # 이미지 전처리용
 
 # [import: labels.py]
 # - 여기서 라벨 정책을 불러온다
-from chexpert_poc.datasets.labels import (
+from chexpert_poc.datasets.label_policy import (
     CHEXPERT_5_LABELS,              # 이 5개를 기본값으로 사용
     encode_chexpert_label,          # raw CSV 라벨(NaN/0/1/-1) => (label_value, loss_mask_value)로 변환
     is_frontal_view,                # frontal_only일 때 row를 남길지 버릴지 판정
