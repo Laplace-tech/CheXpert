@@ -4,8 +4,8 @@ project:
 
 paths:
   # Main source of truth for Python scripts
-  chexpert_root: /home/anna/datasets/cxr/chexpert_small/raw    # CheXpert-small 원본 데이터셋 루트 경로
-  output_root: /home/anna/projects/chexpert_poc/outputs        # 학습 결과(체크포인트, 로그, 예측 csv 등)를 저장할 폴더
+  chexpert_root: data/chexpert_small/raw    # CheXpert-small 원본 데이터셋 루트 경로
+  output_root: outputs                      # 학습 결과(체크포인트, 로그, 예측 csv 등)를 저장할 폴더
 
 data:
   # path_column is currently used by scripts/check_dataset.py.
