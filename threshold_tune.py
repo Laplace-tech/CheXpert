@@ -10,7 +10,7 @@ import numpy as np       # threshold grid / confusion count / metric 계산용
 
 # [연계: train_utils.py]
 # - base.yaml 로드용
-from chexpert_poc.utils.train_utils import load_config
+from chexpert_poc.common.config import load_config
 
 # F1: 양성을 잘 잡으면서도, 위양성은 없어야 함
 # balanced accuracy: 클래스 불균형이 심하고, 양성/음성 모두 어느 정도 공평하게 잘 맞춰야 함

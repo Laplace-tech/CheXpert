@@ -29,12 +29,9 @@ from chexpert_poc.models.densenet import build_densenet121
 # [losses.py]: logits -> sigmoid probability 변환
 from chexpert_poc.utils.losses import logits_to_probs
 
-# [train_utils.py]
-# - config 로드
-# - device 선택
-# - 출력 폴더 생성
-# - JSON 저장
-from chexpert_poc.utils.train_utils import ensure_dir, get_device, load_config, save_json
+from chexpert_poc.common.config import get_config_bool, get_section, load_config
+from chexpert_poc.common.io import ensure_dir, save_json
+from chexpert_poc.common.runtime import get_device
 
 
 def get_section(config: dict, section: str) -> dict[str, Any]:
