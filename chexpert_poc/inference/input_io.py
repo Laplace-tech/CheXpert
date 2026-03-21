@@ -4,6 +4,7 @@ from pathlib import Path
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
+
 def validate_input_image(path: str | Path) -> Path:
     path = Path(path)
     if not path.exists():
@@ -16,17 +17,13 @@ def validate_input_image(path: str | Path) -> Path:
 
 
 def collect_input_paths(input_path: str | Path, recursive: bool = False) -> list[Path]:
-    # 입력이 파일이면 단일 이미지로 처리
-    # 입력이 폴더면 이미지 파일들 전부 수집
     input_path = Path(input_path)
 
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
 
     if input_path.is_file():
-        if input_path.suffix.lower() not in IMAGE_EXTENSIONS:
-            raise ValueError(f"Unsupported image extension: {input_path.suffix}")
-        return [input_path.resolve()]
+        return [validate_input_image(input_path)]
 
     if input_path.is_dir():
         if recursive:

@@ -18,7 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from chexpert_poc.common.config import get_config_bool, get_section, load_config
 from chexpert_poc.common.io import ensure_dir, save_json, save_checkpoint
-from chexpert_poc.common.runtime import get_device, set_seed
+from chexpert_poc.common.runtime import get_device, set_seed, move_tensor
 from chexpert_poc.common.model_config import resolve_num_classes
 
 # 모델 구조 생성 담당
@@ -74,20 +74,6 @@ def get_peak_gpu_memory_mb(device: torch.device) -> float:
     if device.type != "cuda":
         return 0.0
     return torch.cuda.max_memory_allocated(device=device) / (1024**2)
-
-
-def move_tensor(
-    x: torch.Tensor,
-    device: torch.device,
-    channels_last: bool = False,
-) -> torch.Tensor:
-    if channels_last and x.ndim == 4:
-        return x.to(
-            device=device,
-            non_blocking=True,
-            memory_format=torch.channels_last,
-        )
-    return x.to(device=device, non_blocking=True)
 
 
 def get_autocast_context(device: torch.device, use_amp: bool):
@@ -211,7 +197,7 @@ def train_one_epoch(
     model.train()
 
     # epoch 전체 통계 누적용 변수
-    total_loss_sum = 0.0  # reduction="sum" 기준 누적 손실ㄹ
+    total_loss_sum = 0.0  # reduction="sum" 기준 누적 손실
     total_valid_count = (
         0.0  # 실제 loss에 반영된 "유효 라벨 수" (uncertainty mask 제외시켜야 함)
     )
@@ -238,7 +224,7 @@ def train_one_epoch(
     for batch_idx, batch in enumerate(pbar, start=1):
         images = move_tensor(
             batch["image"], device=device, channels_last=channels_last
-        )  # 뭔 개소리지
+        ) 
         labels = move_tensor(batch["label"], device=device)
         loss_mask = move_tensor(batch["loss_mask"], device=device)
 

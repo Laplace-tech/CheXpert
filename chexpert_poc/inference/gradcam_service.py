@@ -16,21 +16,9 @@ from chexpert_poc.explain.gradcam import (
     save_rgb_image,
 )
 from chexpert_poc.inference.postprocess import build_prediction_result
-
+from chexpert_poc.inference.input_io import validate_input_image
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
-
-
-def validate_input_image(path: str | Path) -> Path:
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Input image not found: {path}")
-    if not path.is_file():
-        raise ValueError(f"Input must be a file: {path}")
-    if path.suffix.lower() not in IMAGE_EXTENSIONS:
-        raise ValueError(f"Unsupported image extension: {path.suffix}")
-    return path.resolve()
-
 
 def choose_target_label(
     label_names: list[str],

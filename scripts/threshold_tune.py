@@ -4,7 +4,6 @@ from __future__ import annotations
 # 각 클래스별 최적 threshold를 고른다.
 
 import argparse
-import csv
 from pathlib import Path
 import sys
 from typing import Any
@@ -17,231 +16,18 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from chexpert_poc.common.config import load_config
 from chexpert_poc.common.io import save_json
-
-VALID_CRITERIA = {"f1", "balanced_accuracy", "recall"}
-
-def find_latest_study_predictions_csv(output_root: str | Path) -> Path:
-    output_root = Path(output_root)
-    candidates = list(output_root.glob("train_runs/*/eval/study_predictions.csv"))
-    if not candidates:
-        raise FileNotFoundError(
-            f"No study_predictions.csv found under: {output_root / 'train_runs'}"
-        )
-
-    candidates = sorted(candidates, key=lambda p: p.stat().st_mtime)
-    return candidates[-1]
-
-
-def load_prediction_rows(csv_path: str | Path) -> list[dict[str, str]]:
-    csv_path = Path(csv_path)
-
-    if not csv_path.exists():
-        raise FileNotFoundError(f"Prediction CSV not found: {csv_path}")
-
-    rows: list[dict[str, str]] = []
-    with open(csv_path, "r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(dict(row))
-
-    if not rows:
-        raise RuntimeError(f"Empty CSV: {csv_path}")
-
-    return rows
-
-
-def validate_required_columns(rows: list[dict[str, str]], required_columns: list[str]) -> None:
-    if not rows:
-        raise RuntimeError("Prediction rows are empty")
-
-    missing = [c for c in required_columns if c not in rows[0]]
-    if missing:
-        raise KeyError(f"Missing required columns: {missing}")
-
-
-def confusion_counts(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-) -> tuple[int, int, int, int]:
-    y_true = np.asarray(y_true, dtype=np.int64)
-    y_pred = np.asarray(y_pred, dtype=np.int64)
-
-    if y_true.shape != y_pred.shape:
-        raise ValueError(f"shape mismatch: y_true={y_true.shape}, y_pred={y_pred.shape}")
-
-    tp = int(((y_true == 1) & (y_pred == 1)).sum())
-    tn = int(((y_true == 0) & (y_pred == 0)).sum())
-    fp = int(((y_true == 0) & (y_pred == 1)).sum())
-    fn = int(((y_true == 1) & (y_pred == 0)).sum())
-    return tp, tn, fp, fn
-
-
-def safe_div(n: float, d: float) -> float:
-    if d == 0:
-        return 0.0
-    return float(n / d)
-
-
-def compute_binary_metrics(
-    y_true: np.ndarray,
-    y_prob: np.ndarray,
-    threshold: float,
-) -> dict[str, Any]:
-    y_true = np.asarray(y_true, dtype=np.float32)
-    y_prob = np.asarray(y_prob, dtype=np.float32)
-
-    if y_true.shape != y_prob.shape:
-        raise ValueError(f"shape mismatch: y_true={y_true.shape}, y_prob={y_prob.shape}")
-
-    if y_true.ndim != 1:
-        raise ValueError(f"Expected 1D arrays, got y_true.ndim={y_true.ndim}")
-
-    unique = np.unique(y_true)
-    allowed = {0.0, 1.0}
-    for v in unique.tolist():
-        if float(v) not in allowed:
-            raise ValueError(f"Non-binary y_true detected: {unique.tolist()}")
-
-    if not (0.0 <= threshold <= 1.0):
-        raise ValueError(f"threshold must be in [0,1], got {threshold}")
-
-    y_pred = (y_prob >= threshold).astype(np.int64)
-    tp, tn, fp, fn = confusion_counts(y_true, y_pred)
-
-    precision = safe_div(tp, tp + fp)
-    recall = safe_div(tp, tp + fn)
-    specificity = safe_div(tn, tn + fp)
-    accuracy = safe_div(tp + tn, tp + tn + fp + fn)
-    balanced_accuracy = 0.5 * (recall + specificity)
-
-    if precision + recall == 0:
-        f1 = 0.0
-    else:
-        f1 = 2.0 * precision * recall / (precision + recall)
-
-    return {
-        "threshold": float(threshold),
-        "tp": tp,
-        "tn": tn,
-        "fp": fp,
-        "fn": fn,
-        "precision": float(precision),
-        "recall": float(recall),
-        "specificity": float(specificity),
-        "accuracy": float(accuracy),
-        "balanced_accuracy": float(balanced_accuracy),
-        "f1": float(f1),
-    }
-
-
-def validate_threshold_grid(
-    th_min: float,
-    th_max: float,
-    th_step: float,
-) -> list[float]:
-    th_min = float(th_min)
-    th_max = float(th_max)
-    th_step = float(th_step)
-
-    if not (0.0 <= th_min <= 1.0):
-        raise ValueError(f"th-min must be in [0,1], got {th_min}")
-    if not (0.0 <= th_max <= 1.0):
-        raise ValueError(f"th-max must be in [0,1], got {th_max}")
-    if th_min > th_max:
-        raise ValueError(f"th-min must be <= th-max, got {th_min} > {th_max}")
-    if th_step <= 0.0:
-        raise ValueError(f"th-step must be > 0, got {th_step}")
-
-    thresholds = np.arange(th_min, th_max + 1e-12, th_step, dtype=np.float64)
-    thresholds = [float(x) for x in thresholds]
-
-    if not thresholds:
-        raise RuntimeError("Threshold grid is empty")
-
-    return thresholds
-
-
-def choose_best_threshold(
-    y_true: np.ndarray,
-    y_prob: np.ndarray,
-    thresholds: list[float],
-    criterion: str = "f1",
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    if criterion not in VALID_CRITERIA:
-        raise ValueError(f"Unsupported criterion: {criterion}")
-
-    if not thresholds:
-        raise ValueError("thresholds must not be empty")
-
-    y_true = np.asarray(y_true, dtype=np.float32)
-    y_prob = np.asarray(y_prob, dtype=np.float32)
-
-    if y_true.shape != y_prob.shape:
-        raise ValueError(f"shape mismatch: y_true={y_true.shape}, y_prob={y_prob.shape}")
-
-    if y_true.size == 0:
-        raise ValueError("Cannot choose threshold from empty inputs")
-
-    all_rows: list[dict[str, Any]] = []
-    for th in thresholds:
-        row = compute_binary_metrics(y_true, y_prob, threshold=th)
-        all_rows.append(row)
-
-    def sort_key(row: dict[str, Any]):
-        primary = row[criterion]
-        secondary = row["balanced_accuracy"]
-        tertiary = -abs(row["threshold"] - 0.5)
-        return (primary, secondary, tertiary)
-
-    best_row = max(all_rows, key=sort_key)
-    return best_row, all_rows
-
-
-def save_threshold_grid_csv(rows: list[dict[str, Any]], path: str | Path) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    if not rows:
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write("")
-        return
-
-    fieldnames = list(rows[0].keys())
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def build_infer_thresholds_payload(
-    *,
-    criterion: str,
-    recommended_thresholds: list[float],
-    label_names: list[str],
-    pred_csv_path: Path,
-    th_min: float,
-    th_max: float,
-    th_step: float,
-) -> dict[str, Any]:
-    threshold_string = ",".join(f"{x:.2f}" for x in recommended_thresholds)
-
-    return {
-        "criterion": criterion,
-        "thresholds": recommended_thresholds,
-        "thresholds_str_for_infer": threshold_string,
-        "labels": label_names,
-        "prediction_csv": str(pred_csv_path),
-        "threshold_grid": {
-            "th_min": float(th_min),
-            "th_max": float(th_max),
-            "th_step": float(th_step),
-        },
-        "warning": (
-            "These thresholds are tuned on the same validation predictions used "
-            "to measure performance. Treat them as validation-tuned operating points, "
-            "not unbiased generalization estimates."
-        ),
-    }
+from chexpert_poc.evaluation.artifact_io import save_threshold_grid_csv
+from chexpert_poc.evaluation.prediction_table import (
+    extract_valid_label_arrays,
+    find_latest_study_predictions_csv,
+    load_prediction_rows,
+)
+from chexpert_poc.evaluation.thresholds import (
+    VALID_CRITERIA,
+    build_infer_thresholds_payload,
+    choose_best_threshold,
+    validate_threshold_grid,
+)
 
 
 def main() -> None:
@@ -298,15 +84,7 @@ def main() -> None:
     recommended_thresholds: list[float] = []
 
     for label in label_names:
-        target_col = f"{label}_target"
-        prob_col = f"{label}_prob"
-        mask_col = f"{label}_mask"
-
-        validate_required_columns(rows, [target_col, prob_col, mask_col])
-
-        y_true = np.asarray([float(r[target_col]) for r in rows], dtype=np.float32)
-        y_prob = np.asarray([float(r[prob_col]) for r in rows], dtype=np.float32)
-        y_mask = np.asarray([float(r[mask_col]) for r in rows], dtype=np.float32)
+        y_true, y_prob, y_mask = extract_valid_label_arrays(rows, label)
 
         valid = y_mask > 0.5
         y_true = y_true[valid]

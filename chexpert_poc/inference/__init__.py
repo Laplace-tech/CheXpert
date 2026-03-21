@@ -1,4 +1,4 @@
-from .artifact_io import save_predictions_csv
+from .artifact_io import save_inference_predictions_csv
 from .checkpoint import (
     find_latest_best_checkpoint,
     load_checkpoint,
@@ -26,7 +26,7 @@ from .input_io import (
 )
 
 __all__ = [
-    "save_predictions_csv",
+    "save_inference_predictions_csv",
     
     "find_latest_best_checkpoint",
     "load_checkpoint",

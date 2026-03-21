@@ -10,23 +10,7 @@ from PIL import Image
 
 from chexpert_poc.inference.postprocess import build_prediction_result
 from chexpert_poc.models.densenet import build_densenet121
-
-
-def move_tensor(
-    x: torch.Tensor,
-    device: torch.device,
-    channels_last: bool = False,
-) -> torch.Tensor:
-    # image tensor([B,C,H,W])이고 channels_last=True면
-    # memory_format=torch.channels_last로 device 이동
-    if channels_last and x.ndim == 4:
-        return x.to(
-            device=device,
-            non_blocking=True,
-            memory_format=torch.channels_last,
-        )
-    return x.to(device=device, non_blocking=True)
-
+from chexpert_poc.common.runtime import move_tensor
 
 def build_model_from_checkpoint(
     checkpoint: dict[str, Any],

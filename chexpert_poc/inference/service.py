@@ -10,7 +10,7 @@ from chexpert_poc.common.model_config import resolve_num_classes
 from chexpert_poc.common.runtime import get_device
 from chexpert_poc.datasets.chexpert_dataset import build_image_transform
 
-from chexpert_poc.inference.artifact_io import save_predictions_csv
+from chexpert_poc.inference.artifact_io import save_inference_predictions_csv
 from chexpert_poc.inference.checkpoint import (
     load_checkpoint,
     resolve_checkpoint_path,
@@ -157,7 +157,7 @@ def predict_single_image_service(
 
         save_json(result["metadata"], output_dir / "infer_metadata.json")
         save_json([prediction], output_dir / "predictions.json")
-        save_predictions_csv(
+        save_inference_predictions_csv(
             predictions=[prediction],
             output_csv_path=output_dir / "predictions.csv",
             label_names=context["label_names"],

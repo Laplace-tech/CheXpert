@@ -12,49 +12,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from chexpert_poc.common.config import load_config
+from chexpert_poc.datasets.path_utils import resolve_image_path
 
-
-def resolve_image_path(raw_root: Path, csv_path_value: str) -> Optional[Path]:
-    """
-    CSV에 들어있는 Path 문자열을 로컬 환경에서 실제 존재하는 이미지 파일 경로로 변환한다.
-    """
-    if pd.isna(csv_path_value):
-        return None
-
-    p = str(csv_path_value).strip().replace("\\", "/")
-    if not p:
-        return None
-
-    original = Path(p)
-    candidates: list[Path] = []
-
-    if original.is_absolute():
-        candidates.append(original)
-
-    candidates.append(raw_root / p)
-
-    stripped = p
-    for prefix in ("CheXpert-v1.0-small/", "CheXpert-v1.0/", "./"):
-        if stripped.startswith(prefix):
-            stripped = stripped[len(prefix):]
-    stripped = stripped.lstrip("/")
-
-    candidates.append(raw_root / stripped)
-    candidates.append(raw_root.parent / p)
-    candidates.append(raw_root.parent / stripped)
-    candidates.append(raw_root / Path(p).name)
-
-    for cand in candidates:
-        if cand.exists():
-            return cand.resolve()
-
-    return None
-
-
+# 하나의 라벨에 대해 값 분포를 카운팅한다. (1 / 0 / -1 / NaN)
 def summarize_label(df: pd.DataFrame, label: str) -> dict[str, int]:
-    """
-    하나의 라벨에 대해 값 분포를 카운팅한다. (1 / 0 / -1 / NaN)
-    """
     s = pd.to_numeric(df[label], errors="coerce")
     return {
         "pos_1": int((s == 1).sum()),
@@ -161,7 +122,7 @@ def main() -> None:
     print("=" * 80)
     print("CheXpert dataset check")
     print("=" * 80)
-    print(f"CHEXPERT_ROOT: {raw_root}")
+    print(f"configured dataset root: {raw_root}")
     print(f"exists: {raw_root.exists()}")
 
     train_csv = raw_root / "train.csv"
@@ -176,7 +137,7 @@ def main() -> None:
     print(f"valid dir exists : {valid_dir.exists()}")
 
     if not raw_root.exists():
-        raise FileNotFoundError(f"CHEXPERT_ROOT not found: {raw_root}")
+        raise FileNotFoundError(f"configured dataset root not found: {raw_root}")
     if not train_csv.exists():
         raise FileNotFoundError(f"train.csv not found: {train_csv}")
     if not valid_csv.exists():

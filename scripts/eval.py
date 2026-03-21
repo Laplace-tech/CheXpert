@@ -1,9 +1,3 @@
-# eval.py
-# 학습이 끝난 best.pt(checkpoint)를 불러와 valid 셋 전체를 평가한다.
-#  1) study-level 확률/정답/마스크를 만들고
-#  2) AUROC/AUPRC를 계산하고
-#  3) study_predictions.csv를 저장한다.
-
 from __future__ import annotations
 
 import argparse
@@ -21,10 +15,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from chexpert_poc.common.config import get_config_bool, get_section, load_config  # config 읽기 / bool 옵션 안전하게 읽기 / data 섹션 꺼내기
-from chexpert_poc.common.io import ensure_dir, save_json                          # eval 결과 저장 폴더 생성 / json 저장
-from chexpert_poc.common.model_config import resolve_num_classes                  # data.target_labels 길이 기준으로 num_classes 결정
-from chexpert_poc.common.runtime import get_device                                # cpu / cuda 선택
+from chexpert_poc.common.config import get_config_bool, get_section, load_config
+from chexpert_poc.common.io import ensure_dir, save_json
+from chexpert_poc.common.model_config import resolve_num_classes
+from chexpert_poc.common.runtime import get_device, move_tensor
 
 # valid dataset 생성
 from chexpert_poc.datasets.chexpert_dataset import build_chexpert_dataset        
@@ -45,24 +39,7 @@ from chexpert_poc.metrics.classification import (
     format_classification_metrics_table,
 )
 
-# =========================================================
-# tensor / loader helper
-# =========================================================
-
-def move_tensor(
-    x: torch.Tensor,
-    device: torch.device,
-    channels_last: bool = False,
-) -> torch.Tensor:
-    if channels_last and x.ndim == 4:
-        return x.to(
-            device=device,
-            non_blocking=True,
-            memory_format=torch.channels_last,
-        )
-    return x.to(device=device, non_blocking=True)
-
-
+# loader helper
 def build_valid_loader(config: dict) -> DataLoader:
     """
     eval 전용 valid DataLoader 생성
@@ -145,7 +122,7 @@ def run_inference(
         """
         Logits를 멀티라벨 확률로 변환한다.
         - model은 sigmoid 미적용된 raw logits를 출력한다.
-        - eval/infer 시에는 획률이 필요하므로 sigmoid가 적용됨.
+        - eval/infer 시에는 확률이 필요하므로 sigmoid가 적용됨.
         - 다중 분류가 아니라 이진 멀티라벨 분류이므로 각 클래스가 독립적으로 0~1 확률을 가짐.
         """
         probs = torch.sigmoid(logits)
@@ -240,7 +217,7 @@ def aggregate_by_study_max(
 # save / metadata
 # =========================================================
 
-def save_predictions_csv(
+def save_study_predictions_csv(
     path: str | Path,
     probs: np.ndarray,
     targets: np.ndarray,
@@ -389,7 +366,7 @@ def main() -> None:
     save_json(summary, run_dir / "summary_metrics.json")
     save_json(eval_metadata, run_dir / "eval_metadata.json")
 
-    save_predictions_csv(
+    save_study_predictions_csv(
         path=run_dir / "study_predictions.csv",
         probs=study_result["probs"],
         targets=study_result["targets"],

@@ -1,454 +1,345 @@
-# chexpert_poc
+# CheXpert PoC
 
 CheXpert-small 기반 흉부 X-ray 멀티라벨 분류 PoC 저장소입니다.  
-이 저장소는 **학습(train) / 평가(eval) / threshold tuning / 추론(infer) / Grad-CAM 시각화**까지 포함하는 **end-to-end baseline 실험 코드베이스**입니다.
-
-현재 목적은 제품 서비스가 아니라, **CheXpert 공식 5개 병변 태스크에 대한 안정적인 baseline 구축과 분석**입니다.
+이 리포는 **학습(train) / 평가(eval) / threshold tuning / error analysis / 추론(infer) / Grad-CAM**까지 포함하는 **실험 리포**이며, 향후 `capstone-cxr`의 `ai-service`로 옮길 **최소 추론 코어의 source repo** 역할도 함께 합니다.
 
 ---
 
-## 1. 현재 범위
+## 1. 이 리포의 역할
 
-이 프로젝트는 아래 범위를 기준으로 동작합니다.
+이 프로젝트는 아래 두 목적을 동시에 가집니다.
 
-- 데이터셋: **CheXpert-small**
-- 타겟 라벨: **공식 5개 competition task**
-  - Atelectasis
-  - Cardiomegaly
-  - Consolidation
-  - Edema
-  - Pleural Effusion
-- 모델: **DenseNet121 baseline**
-- 입력 뷰: **frontal only**
-- 기본 uncertain 정책: **U-Ignore**
-- 비교 후보 uncertain 정책: **U-Ones**
+- **실험 리포**: CheXpert-small 기반 baseline 재현, 비교 실험, 분석 기록
+- **이식용 source repo**: 나중에 서비스에 넣을 최소 추론 코어 정리
 
-주요 기능:
+중요한 원칙은 명확합니다.
 
-- 학습
-- 검증셋 평가
-- threshold tuning
-- 단건/배치 추론
-- Grad-CAM 생성
+- `chexpert_poc`는 **실험 리포**입니다.
+- `capstone-cxr`는 **제품 리포**입니다.
+- 이 리포 전체를 서비스로 복붙하지 않습니다.
+- 서비스에는 여기서 검증된 **최소 추론 코어만** 옮깁니다.
 
 ---
 
-## 2. 저장소 구조
+## 2. 지금 프로젝트 상태
+
+현재 이 리포는 **리팩토링 1차를 마쳤고**, 이제는 구조를 더 바꾸는 단계가 아니라 **baseline 재확립 및 비교 실험 관리 단계**에 들어와 있습니다.
+
+현재 판단은 아래와 같습니다.
+
+- `common / datasets / training / evaluation / inference / scripts` 구조가 정리됨
+- 공용 후처리 로직이 `chexpert_poc/evaluation/*`로 분리됨
+- 추론 쪽 최소 코어가 `chexpert_poc/inference/*` 기준으로 정리됨
+- `configs/base.yaml` 기준 repo-relative path 정책이 정착됨
+- 우선순위는 추가 리팩토링이 아니라 **baseline 확정 → 비교 실험 → 기록 축적**임
+
+---
+
+## 3. 문서 빠른 이동
+
+### 가장 먼저 읽을 것
+- [실험노트 모음](docs/experiments/README.md)
+- [Baseline 01 실험 기록](docs/experiments/baseline_01_run_20260321_125758.md)
+- [실험 기록 템플릿](docs/experiments/_template.md)
+
+### 지금 당장 실행할 때 볼 것
+- 아래 **실행 파이프라인** 섹션
+- `configs/base.yaml`
+- `scripts/`
+
+### 결과가 어디에 저장되는지 볼 것
+- `outputs/train_runs/<run_id>/`
+- `logs/`
+- `docs/experiments/`
+
+---
+
+## 4. 현재 baseline 정책
+
+현재 기준 baseline은 아래 설정을 기본으로 합니다.
+
+### 데이터셋
+- Dataset: `CheXpert-small`
+- Root path: `data/chexpert_small/raw`
+
+### 타겟 라벨
+공식 5-task subset
+- Atelectasis
+- Cardiomegaly
+- Consolidation
+- Edema
+- Pleural Effusion
+
+### 데이터 정책
+- View mode: `frontal_only`
+- Uncertainty policy: `U-Ignore`
+- Evaluation aggregation: `study-level max`
+
+### 모델 / 학습 정책
+- Backbone: `DenseNet121`
+- Input size: `320`
+- Optimizer: `Adam`
+- Learning rate: `1e-4`
+- `pos_weight_clip_max`: `8`
+- AMP: `True`
+- Channels-last: `True`
+
+### 평가 정책
+- Class-wise `AUROC`, `AUPRC`
+- Mean `AUROC`, Mean `AUPRC`
+- Threshold tuning sweep: `0.05 ~ 0.95`
+
+---
+
+## 5. 기준 baseline 결과 요약
+
+현재 1차 baseline 기록은 아래 run을 기준으로 정리되어 있습니다.
+
+- Run ID: `run_20260321_125758`
+- Best epoch: `3`
+- Selection rule: **best validation loss checkpoint (`best.pt`)**
+- Mean AUROC: `0.8811`
+- Mean AUPRC: `0.7387`
+
+핵심 해석:
+
+- 학습 파이프라인은 정상 동작함
+- epoch 3 이후 과적합 패턴이 보임
+- baseline 모델은 마지막 epoch가 아니라 **best.pt** 기준으로 봐야 함
+- F1 기준 threshold tuning 결과 대부분의 클래스가 `0.5`보다 낮은 threshold를 선호함
+- 현재 baseline은 성능은 준수하지만, threshold 기준으로는 **recall 쪽으로 약간 기운 운영점**임
+
+자세한 내용은 아래 문서를 봅니다.
+
+- [Baseline 01 실험 기록](docs/experiments/baseline_01_run_20260321_125758.md)
+
+---
+
+## 6. 현재 리포 구조
 
 ```text
-chexpert_poc/
+.
 ├── README.md
-├── configs/
+├── checkpoints
+├── chexpert_poc
+│   ├── common
+│   ├── datasets
+│   ├── evaluation
+│   ├── explain
+│   ├── inference
+│   ├── metrics
+│   ├── models
+│   └── training
+├── configs
 │   └── base.yaml
-├── chexpert_poc/
-│   ├── datasets/
-│   │   ├── chexpert_dataset.py
-│   │   └── labels.py
-│   ├── explain/
-│   │   └── gradcam.py
-│   ├── metrics/
-│   │   └── ...
-│   ├── models/
-│   │   └── densenet.py
-│   └── utils/
-│       ├── class_weights.py
-│       ├── losses.py
-│       └── train_utils.py
-├── train.py
-├── eval.py
-├── threshold_tune.py
-├── infer.py
-├── error_analysis.py
-├── gradcam_demo.py
-├── scripts/
-├── outputs/
-└── checkpoints/
+├── data
+│   └── chexpert_small/raw
+├── docs
+│   └── experiments
+├── logs
+├── outputs
+│   ├── gradcam_runs
+│   ├── infer_runs
+│   └── train_runs
+└── scripts
+    ├── check_dataset.py
+    ├── sanity_dataloader.py
+    ├── train.py
+    ├── eval.py
+    ├── threshold_tune.py
+    ├── error_analysis.py
+    ├── infer.py
+    └── gradcam_demo.py
 ```
-
-### 파일 역할 요약
-
-- `configs/base.yaml`  
-  실험 설정 파일입니다. 데이터 경로, 라벨, 이미지 크기, 학습 옵션 등을 정의합니다.
-
-- `chexpert_poc/datasets/labels.py`  
-  라벨 정책 정의 파일입니다. target labels, uncertainty 처리, frontal view 판별 로직이 들어 있습니다.
-
-- `chexpert_poc/datasets/chexpert_dataset.py`  
-  CheXpert CSV를 읽어 학습용 샘플(image, label, loss mask 등)로 변환합니다.
-
-- `chexpert_poc/models/densenet.py`  
-  DenseNet121 모델 생성 로직입니다.
-
-- `chexpert_poc/utils/losses.py`  
-  멀티라벨 BCE 기반 손실 계산 로직입니다.
-
-- `chexpert_poc/utils/class_weights.py`  
-  클래스 불균형 보정을 위한 `pos_weight` 계산 로직입니다.
-
-- `train.py`  
-  학습 진입점입니다.
-
-- `eval.py`  
-  검증셋 평가 및 메트릭 저장 스크립트입니다.
-
-- `threshold_tune.py`  
-  클래스별 threshold 탐색 및 저장 스크립트입니다.
-
-- `infer.py`  
-  단건/배치 추론 스크립트입니다.
-
-- `gradcam_demo.py`, `chexpert_poc/explain/gradcam.py`  
-  Grad-CAM 시각화 생성 코드입니다.
-
-- `error_analysis.py`  
-  예측 결과 기반 오분류/에러 분석용 스크립트입니다.
 
 ---
 
-## 3. 환경 준비
+## 7. 패키지 역할 요약
 
-권장 환경:
+### `chexpert_poc/common`
+공용 설정, IO, runtime 유틸리티를 둡니다.
 
-- Python 3.11+
-- PyTorch with CUDA
-- Linux/WSL 기반 실행
+### `chexpert_poc/datasets`
+CSV 로드, 경로 해석, label/loss mask 생성, view policy 적용을 담당합니다.
 
-예시:
+### `chexpert_poc/training`
+DataLoader 생성, loss, optimizer, class weight 계산을 담당합니다.
+
+### `chexpert_poc/evaluation`
+`eval.py`, `threshold_tune.py`, `error_analysis.py`에서 쓰는 후처리 로직을 담당합니다.
+
+### `chexpert_poc/inference`
+checkpoint 로드, 입력 이미지 검증, 확률 후처리, 추론 결과 저장, 서비스 이식용 entry를 담당합니다.
+
+### `scripts`
+실행용 엔트리포인트만 둡니다.
+
+---
+
+## 8. 실행 파이프라인
+
+기본 실행 순서는 아래와 같습니다.
+
+```text
+check_dataset
+-> sanity_dataloader
+-> train
+-> eval
+-> threshold_tune
+-> error_analysis
+-> infer
+-> gradcam_demo
+```
+
+실제 명령어는 다음과 같습니다.
+
+### 8.1 환경 진입
 
 ```bash
-python3 -m venv .venv
+cd /home/anna/projects/chexpert_poc
 source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 환경 변수 예시
-
-```bash
-export PROJECT_ROOT=/home/anna/projects/chexpert_poc
-export CHEXPERT_ROOT=/home/anna/datasets/cxr/chexpert_small/raw
 export PYTHONPATH=/home/anna/projects/chexpert_poc
-export OUTPUT_ROOT=/home/anna/projects/chexpert_poc/outputs
 ```
 
----
-
-## 4. 데이터셋 준비
-
-이 프로젝트는 **CheXpert-small raw dataset**을 기준으로 합니다.
-
-예상 경로 예시:
-
-```text
-/home/anna/datasets/cxr/chexpert_small/raw/
-├── train.csv
-├── valid.csv
-├── train/
-└── valid/
-```
-
-데이터셋 루트 경로는 `configs/base.yaml`의 설정값으로 지정합니다.
-
----
-
-## 5. 설정 파일
-
-기본 설정은 `configs/base.yaml`에 있습니다.
-
-핵심 설정 예시:
-
-- `data.target_labels`: 사용할 병변 라벨 목록
-- `data.image_size`: 입력 이미지 크기
-- `data.uncertainty_strategy`: uncertain(-1) 처리 방식
-- `data.view_mode`: frontal / all view 사용 정책
-- `model.backbone`: 현재는 DenseNet121 baseline
-- `train.use_pos_weight`: 클래스 불균형 보정 사용 여부
-- `train.amp`: mixed precision 사용 여부
-
----
-
-## 6. 학습
-
-기본 학습 실행 예시:
+### 8.2 데이터셋 / 로더 점검
 
 ```bash
-python train.py --config configs/base.yaml
+python scripts/check_dataset.py --config configs/base.yaml
+python scripts/sanity_dataloader.py --config configs/base.yaml
 ```
 
-학습 결과는 보통 `outputs/train_runs/...` 아래에 저장됩니다.
-
-대표 산출물:
-
-- `checkpoints/best.pt`
-- `checkpoints/last.pt`
-- `history.csv`
-- `history.json`
-- `model_info.json`
-- `train_dataset_stats.json`
-- `valid_dataset_stats.json`
-
----
-
-## 7. 평가
-
-검증셋 평가 예시:
+### 8.3 baseline 학습
 
 ```bash
-python eval.py \
-  --config configs/base.yaml \
-  --checkpoint /path/to/best.pt
+python scripts/train.py --config configs/base.yaml
 ```
 
-평가 결과는 보통 `outputs/train_runs/.../eval/` 아래에 저장됩니다.
-
-대표 산출물:
-
-- `summary_metrics.json`
-- `per_class_metrics.json`
-- `study_predictions.csv`
-
----
-
-## 8. Threshold Tuning
-
-클래스별 최적 threshold 탐색 예시:
+### 8.4 평가
 
 ```bash
-python threshold_tune.py \
-  --config configs/base.yaml \
-  --checkpoint /path/to/best.pt
+python scripts/eval.py --config configs/base.yaml
 ```
 
-대표 산출물:
-
-- `best_thresholds_by_class.json`
-- `infer_thresholds.json`
-
-`infer_thresholds.json`은 추론 시 사용되는 threshold 기준 파일입니다.
-
----
-
-## 9. 추론
-
-단일 이미지 추론 예시:
+### 8.5 threshold tuning
 
 ```bash
-python infer.py \
-  --config configs/base.yaml \
-  --checkpoint /path/to/best.pt \
-  --input /path/to/image.jpg \
-  --thresholds 0.47,0.22,0.36,0.39,0.60
+python scripts/threshold_tune.py --config configs/base.yaml --criterion f1
 ```
 
-추론 결과는 보통 `outputs/infer_runs/...` 아래에 저장됩니다.
-
-대표 산출물:
-
-- `predictions.json`
-- `predictions.csv`
-- `infer_metadata.json`
-
----
-
-## 10. Grad-CAM
-
-Grad-CAM 실행 예시:
+비교 실험용 예시:
 
 ```bash
-python gradcam_demo.py \
-  --config configs/base.yaml \
-  --checkpoint /path/to/best.pt \
-  --input /path/to/image.jpg
+python scripts/threshold_tune.py --config configs/base.yaml --criterion balanced_accuracy
+python scripts/threshold_tune.py --config configs/base.yaml --criterion recall
 ```
 
-결과는 `outputs/gradcam_runs/...` 아래에 저장됩니다.
+### 8.6 error analysis
 
-대표 산출물:
-
-- `original.png`
-- `heatmap_<label>.png`
-- `overlay_<label>.png`
-- `panel_<label>.png`
-- `gradcam_result.json`
-
----
-
-## 11. 라벨 정책 / Uncertainty 정책
-
-### CheXpert raw label 의미
-
-- `1` : positive
-- `0` : negative
-- `-1`: uncertain
-- `NaN`: missing
-
-### 현재 프로젝트 기본 처리
-
-- `NaN -> 0.0`
-- 기본 uncertainty 정책: `U-Ignore`
-
-### U-Ignore
-
-- `-1 -> label=0.0, loss_mask=0.0`
-- uncertain 샘플은 해당 클래스의 loss 계산에서 제외됩니다.
-
-의미:
-
-- 애매한 라벨을 정답으로 강하게 믿지 않음
-- baseline을 더 안정적으로 가져가기 쉬움
-- 대신 uncertain 샘플 일부를 학습에서 버리게 됨
-
-### U-Ones
-
-- `-1 -> label=1.0, loss_mask=1.0`
-- uncertain 샘플을 양성으로 간주하여 학습에 포함합니다.
-
-의미:
-
-- uncertain 샘플도 학습 신호로 활용
-- recall(민감도)에 유리할 수 있음
-- 대신 라벨 노이즈 증가 위험이 있어 precision/특이도 저하 가능성 존재
-
-### 왜 기본값이 U-Ignore인가
-
-초기 baseline에서는 noisy supervision을 줄이는 것이 더 안전하기 때문입니다.  
-이후 비교 실험으로 `U-Ones`를 적용해 pathology별 차이를 볼 수 있습니다.
-
----
-
-## 12. View 정책
-
-현재 기본 설정은 **frontal only**입니다.
-
-즉:
-
-- frontal 이미지만 사용
-- lateral 이미지는 제외
-
-이 선택은 입력 분포를 단순화하고 baseline 안정성을 높이기 위한 것입니다.
-
----
-
-## 13. 주요 평가 지표
-
-### Accuracy
-전체 예측 중 맞춘 비율입니다.
-
-```text
-accuracy = (TP + TN) / (TP + TN + FP + FN)
+```bash
+python scripts/error_analysis.py --config configs/base.yaml
 ```
 
-주의할 점은, 의료 데이터처럼 클래스 불균형이 심한 경우 accuracy만 높아도 좋은 모델이라고 볼 수 없다는 점입니다.
+### 8.7 inference / Grad-CAM smoke test
 
-### Recall = Sensitivity = 민감도
-실제 양성 중에서 양성으로 맞춘 비율입니다.
-
-```text
-recall = TP / (TP + FN)
-```
-
-의미:
-
-- 실제 환자를 얼마나 놓치지 않았는가
-- 높을수록 FN(False Negative)이 적음
-
-### Specificity = 특이도
-실제 음성 중에서 음성으로 맞춘 비율입니다.
-
-```text
-specificity = TN / (TN + FP)
-```
-
-의미:
-
-- 정상인을 괜히 병이라고 오진하지 않는가
-- 높을수록 FP(False Positive)가 적음
-
-### Precision = 정밀도
-양성이라고 예측한 것 중 실제 양성 비율입니다.
-
-```text
-precision = TP / (TP + FP)
-```
-
-의미:
-
-- 양성 판정이 얼마나 믿을 만한가
-
-### F1-score
-Precision과 Recall의 조화평균입니다.
-
-```text
-F1 = 2 * (precision * recall) / (precision + recall)
-```
-
-의미:
-
-- precision과 recall을 균형 있게 보고 싶을 때 사용
-
-### 해석 요약
-
-- recall/민감도 높음 → 실제 병변을 덜 놓침
-- specificity/특이도 높음 → 정상인을 덜 오진함
-- precision 높음 → 양성 판정의 신뢰도가 높음
-- accuracy는 참고 지표일 뿐, 단독 해석은 위험함
-
----
-
-## 14. Threshold와 Trade-off
-
-모델의 sigmoid 출력에 threshold를 적용하면 최종 양성/음성 판단이 결정됩니다.
-
-일반적으로:
-
-- threshold를 낮추면  
-  양성 판정이 많아져 recall은 올라갈 수 있지만 FP도 늘어 precision/특이도는 떨어질 수 있습니다.
-
-- threshold를 높이면  
-  양성 판정이 줄어 precision/특이도는 좋아질 수 있지만 실제 양성을 놓쳐 recall이 떨어질 수 있습니다.
-
-따라서 클래스별 threshold tuning은 단순 후처리가 아니라 중요한 성능 조정 단계입니다.
-
----
-
-## 15. 출력 폴더 구조
-
-대표적인 출력 구조는 아래와 같습니다.
-
-```text
-outputs/
-├── train_runs/
-│   └── run_xxx/
-│       ├── checkpoints/
-│       ├── history.csv
-│       ├── history.json
-│       ├── model_info.json
-│       └── eval/
-├── infer_runs/
-│   └── infer_xxx/
-└── gradcam_runs/
-    └── gradcam_xxx/
+```bash
+python scripts/infer.py --config configs/base.yaml --input data/chexpert_small/raw/valid/patient64541/study1/view1_frontal.jpg
+python scripts/gradcam_demo.py --config configs/base.yaml --input data/chexpert_small/raw/valid/patient64541/study1/view1_frontal.jpg
 ```
 
 ---
 
-## 16. 현재 한계
+## 9. 산출물 위치
 
-- backbone은 현재 DenseNet121 baseline 중심입니다.
-- uncertainty 정책은 `U-Ignore`, `U-Ones`만 구현되어 있습니다.
-- 이 저장소는 서비스용 코드가 아니라 실험용 PoC 코드베이스입니다.
-- 학습/평가/분석 로직과 추론 로직이 아직 완전히 분리된 서비스 구조는 아닙니다.
+### 학습 산출물
+- `outputs/train_runs/<run_id>/checkpoints/best.pt`
+- `outputs/train_runs/<run_id>/checkpoints/last.pt`
+- `outputs/train_runs/<run_id>/history.json`
+- `outputs/train_runs/<run_id>/config_snapshot.json`
+- `outputs/train_runs/<run_id>/model_info.json`
+- `outputs/train_runs/<run_id>/pos_weight_stats.json`
+
+### 평가 산출물
+- `outputs/train_runs/<run_id>/eval/per_class_metrics.json`
+- `outputs/train_runs/<run_id>/eval/summary_metrics.json`
+- `outputs/train_runs/<run_id>/eval/eval_metadata.json`
+- `outputs/train_runs/<run_id>/eval/study_predictions.csv`
+
+### threshold tuning 산출물
+- `outputs/train_runs/<run_id>/eval/threshold_tuning/infer_thresholds.json`
+- `outputs/train_runs/<run_id>/eval/threshold_tuning/best_thresholds_by_class.json`
+- `outputs/train_runs/<run_id>/eval/threshold_tuning/threshold_grid_metrics.csv`
+
+### error analysis 산출물
+- `outputs/train_runs/<run_id>/eval/error_analysis/`
+
+### 실험 기록 문서
+- `docs/experiments/README.md`
+- `docs/experiments/baseline_01_run_20260321_125758.md`
+- `docs/experiments/_template.md`
 
 ---
 
-## 17. 앞으로의 사용 방향
+## 10. 실험 기록 운영 원칙
 
-이 저장소는 계속 **학습/평가/분석 실험실**로 유지합니다.  
-서비스 이식 시에는 이 저장소를 통째로 복사하지 않고, 아래 최소 추론 코어만 분리하는 방향을 권장합니다.
+이 프로젝트는 논문/보고서까지 염두에 두고 있으므로, 실험은 반드시 **재현 가능하게 기록**해야 합니다.
 
-- model loader
-- single image preprocess
-- inference runner
-- threshold apply
-- Grad-CAM generator
+기본 원칙:
 
-즉, `chexpert_poc`는 실험용 baseline의 기준점으로 유지하고, 서비스 코드는 별도 레이어에서 가져가는 것이 맞습니다.
+- baseline / 비교실험 / 실패실험까지 기록
+- 마지막 epoch가 아니라 **best checkpoint 기준**으로 기록
+- config, dataset policy, run 목적, threshold, 결과 해석을 같이 기록
+- 비교 실험에서는 한 번에 하나의 변수만 바꿈
+
+실험이 끝나면 반드시 아래 중 하나를 남깁니다.
+
+- 새 실험 노트 파일 추가
+- 기존 실험 노트에 결과 및 해석 업데이트
+
+실험노트 폴더는 여기입니다.
+
+- [실험노트 모음](docs/experiments/README.md)
+
+---
+
+## 11. 다음 비교 실험 우선순위
+
+현재 기준으로 다음 비교 실험 우선순위는 아래와 같습니다.
+
+1. `U-Ignore` vs `U-Ones`
+2. threshold criterion 비교 (`f1`, `balanced_accuracy`, `recall`)
+3. `pos_weight_clip_max` 비교
+
+중요 원칙:
+
+- baseline 하나를 먼저 고정합니다.
+- 그다음 변경점 하나씩만 비교합니다.
+- 많은 ablation을 한 번에 벌리지 않습니다.
+
+---
+
+## 12. 서비스 이식 원칙
+
+이 리포는 나중에 `capstone-cxr`의 `ai-service`로 추론 기능을 이식하기 위한 source repo이기도 합니다.
+
+다만 이 리포 전체를 옮기지 않습니다. 우선순위는 아래와 같습니다.
+
+- `chexpert_poc/inference/service.py`
+- `chexpert_poc/inference/gradcam_service.py`
+- `chexpert_poc/inference/predictor.py`
+- `chexpert_poc/inference/postprocess.py`
+- `chexpert_poc/inference/checkpoint.py`
+- 참조용으로 `models/densenet.py`, `datasets/label_policy.py`, `explain/gradcam.py`
+
+즉,
+
+- `chexpert_poc` = 실험 리포
+- `capstone-cxr` = 제품 리포
+
+이 분리를 계속 유지합니다.
+
+---
+
+## 13. 현재 시점 한 줄 요약
+
+현재 `chexpert_poc`는 **리팩토링 1차 완료 후 baseline 재확립 단계**에 있으며,  
+이제부터의 핵심은 **구조를 더 바꾸는 것**이 아니라 **기준 baseline을 고정하고, 비교 실험을 통제된 방식으로 기록하는 것**입니다.

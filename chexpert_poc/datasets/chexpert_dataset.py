@@ -9,7 +9,7 @@ from PIL import Image                # 이미지 열기
 from torch.utils.data import Dataset # Pytorch 데이터셋 클래스 상속용
 from torchvision import transforms   # 이미지 전처리용
 
-# [import: labels.py]
+# [import: label_policy.py]
 # - 여기서 라벨 정책을 불러온다
 from chexpert_poc.datasets.label_policy import (
     CHEXPERT_5_LABELS,              # 이 5개를 기본값으로 사용
@@ -18,16 +18,7 @@ from chexpert_poc.datasets.label_policy import (
     validate_uncertainty_strategy,  # U-Ignore / U-Ones 설정값 검증
 )
 
-# CSV의 Path 컬럼 값 앞에 붙을 수 있는 prefix 목록
-# : resolve_image_path()에서 실제 로컬 파일 경로를 찾을 때 사용
-# ex)
-# - CheXpert-v1.0-small/train/patient00001/study1/view1_frontal.jpg
-# - CheXpert-v1.0-small/valid/patient64541/study1/view1_frontal.jpg
-KNOWN_CSV_PATH_PREFIXES: Final[tuple[str, ...]] = (
-    "CheXpert-v1.0-small/",
-    "CheXpert-v1.0/",
-    "./",
-)
+from chexpert_poc.datasets.path_utils import resolve_image_path
 
 # 현재 프로젝트에서 허용하는 view 필터 정책
 VALID_VIEW_MODES: Final[set[str]] = {"frontal_only", "all"}
@@ -271,43 +262,6 @@ class CheXpertDataset(Dataset):
             "study_id": row["study_id"],
         }
 
-
-def resolve_image_path(raw_root: Path, csv_path_value: object) -> Optional[Path]:
-    """
-    CSV의 Path 값을 실제 로컬 이미지 경로로 해석.
-    경로 표현이 제각각일 수 있어서 여러 후보를 순서대로 시도한다.
-    """
-    if pd.isna(csv_path_value):
-        return None
-
-    path_str = str(csv_path_value).strip().replace("\\", "/")
-    if not path_str:
-        return None
-
-    original = Path(path_str)
-    candidates: list[Path] = []
-
-    if original.is_absolute():
-        candidates.append(original)  # 절대경로면 그대로 시도
-
-    candidates.append(raw_root / path_str)  # raw_root 기준
-
-    stripped = path_str
-    for prefix in KNOWN_CSV_PATH_PREFIXES:
-        if stripped.startswith(prefix):
-            stripped = stripped[len(prefix):]
-            break
-    stripped = stripped.lstrip("/")
-
-    candidates.append(raw_root / stripped)         # prefix 제거 후 raw_root 기준
-    candidates.append(raw_root.parent / path_str)  # raw_root.parent 기준 fallback
-    candidates.append(raw_root.parent / stripped)
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.resolve()
-
-    return None
 
 
 def build_image_transform(image_size: int) -> Callable:

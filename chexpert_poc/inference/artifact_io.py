@@ -7,7 +7,7 @@ from typing import Any   # 딕셔너리 내부 값 타입이 제각각일 때 An
 
 
 # predictions.json과 별도로 csv 저장
-def save_predictions_csv(
+def save_inference_predictions_csv(
     predictions: list[dict[str, Any]], # 예측 결과 여러 개를 담은 리스트
     output_csv_path: str | Path,       # 저장할 CSV 파일 경로
     label_names: list[str],            # 클래스 이름 목록

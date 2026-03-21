@@ -41,7 +41,7 @@ model:
 
 train:
   # Core optimization settings
-  epochs: 4                      # 전체 train set을 몇 번 반복해서 학습할지
+  epochs: 10                      # 전체 train set을 몇 번 반복해서 학습할지
   lr: 0.0001                     # learning rate. 가중치를 얼마나 크게 업데이트할지 정하는 핵심 값
   weight_decay: 0.0              # L2 regularization 강도. 0이면 사용 안 함
   optimizer: adam                # 최적화 알고리즘. 여기서는 Adam 사용
