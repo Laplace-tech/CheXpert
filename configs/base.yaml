@@ -1,15 +1,25 @@
+# configs/base.yaml
+
 project:
   name: chexpert_poc 
   seed: 42
 
 paths:
-  # Main source of truth for Python scripts
-  chexpert_root: data/chexpert_small/raw    # CheXpert-small 원본 데이터셋 루트 경로
-  output_root: outputs                      # 학습 결과(체크포인트, 로그, 예측 csv 등)를 저장할 폴더
+  # Main source of truth for dataset files and relative image paths
+  chexpert_root: data/chexpert_small/raw
+
+  # Root for experiment outputs
+  output_root: outputs
 
 data:
-  # path_column is currently used by scripts/check_dataset.py.
-  path_column: Path              # CSV에서 이미지 경로가 들어 있는 컬럼명. 현재는 "Path" 컬럼을 사용
+  # CSV column that stores relative image paths like:
+  # train/... , valid/... , test/...
+  path_column: Path
+
+  # Split CSV filenames under paths.chexpert_root
+  train_csv: train.csv
+  valid_csv: valid.csv
+  test_csv: test_labels.csv
 
   # Official 5-task subset used in this project
   target_labels:                
@@ -20,15 +30,17 @@ data:
     - Pleural Effusion           # 흉막삼출
 
   # Image / loader settings
-  image_size: 320                # 입력 이미지를 320x320으로 리사이즈
+  image_size: 320                # 입력 이미지를 320 x 320으로 리사이즈
   batch_size: 32                 # 한 번의 iteration에서 GPU에 올릴 이미지 개수
   num_workers: 4                 # DataLoader가 데이터를 미리 읽어오는 프로세스 수
   pin_memory: true               # CPU->GPU 전송을 빠르게 하려고 pinned memory 사용
   persistent_workers: true       # epoch이 바뀌어도 worker를 매번 새로 안 띄우고 유지해서 로딩 오버헤드 감소
 
   # Label / view policy
-  uncertainty_strategy: U-Ignore # CheXpert의 불확실 라벨(-1) 처리 방식
-                                 # U-Ignore면 -1인 샘플은 해당 라벨 loss 계산에서 제외
+  # NOTE:
+  # - uncertainty_strategy mainly matters for train/valid
+  # - official test may behave differently from train/valid on uncertain labels
+  uncertainty_strategy: U-Zero   # CheXpert의 불확실 라벨(-1) 처리 방식
   view_mode: frontal_only        # 정면 X-ray만 사용. lateral(측면) 이미지는 제외
 
 
@@ -41,18 +53,18 @@ model:
 
 train:
   # Core optimization settings
-  epochs: 10                      # 전체 train set을 몇 번 반복해서 학습할지
+  epochs: 10                     # 전체 train set을 몇 번 반복해서 학습할지
   lr: 0.0001                     # learning rate. 가중치를 얼마나 크게 업데이트할지 정하는 핵심 값
   weight_decay: 0.0              # L2 regularization 강도. 0이면 사용 안 함
   optimizer: adam                # 최적화 알고리즘. 여기서는 Adam 사용
 
   # Class imbalance handling
   use_pos_weight: true           # 양성 샘플이 적은 라벨에 더 큰 가중치를 줘서 불균형 보정
-  pos_weight_clip_max: 8        # pos_weight의 최대값 제한
+  pos_weight_clip_max: 8         # pos_weight의 최대값 제한
 
   # Runtime / performance defaults
   amp: true                      # Automatic Mixed Precision 사용
   channels_last: true            # 텐서 메모리 포맷을 channels_last로 사용
   max_grad_norm: null            # gradient clipping 상한값
-  cudnn_benchmark: true         # cuDNN이 최적 커널을 탐색할지 여부
+  cudnn_benchmark: true          # cuDNN이 최적 커널을 탐색할지 여부
   matmul_precision: high         # torch의 행렬곱 정밀도 설정

@@ -1,7 +1,12 @@
+# scripts/threshold_tune.py
 from __future__ import annotations
 
 # eval.py가 만든 study_predictions.csv를 읽어서
 # 각 클래스별 최적 threshold를 고른다.
+#
+# 주의:
+# - threshold tuning은 개발용 validation(valid) 예측에 대해서만 수행한다.
+# - split 인수는 받지만, test split에 대한 tuning은 허용하지 않는다.
 
 import argparse
 from pathlib import Path
@@ -34,10 +39,17 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="configs/base.yaml")
     parser.add_argument(
+        "--split",
+        type=str,
+        default="valid",
+        choices=["valid", "test"],
+        help="prediction split to read. threshold tuning is only allowed on valid.",
+    )
+    parser.add_argument(
         "--pred-csv",
         type=str,
         default=None,
-        help="explicit study_predictions.csv path; if omitted, latest eval file is used",
+        help="explicit study_predictions.csv path; if omitted, latest eval file for the selected split is used",
     )
     parser.add_argument(
         "--criterion",
@@ -51,6 +63,13 @@ def main() -> None:
     parser.add_argument("--th-step", type=float, default=0.01)
     args = parser.parse_args()
 
+    # threshold tuning은 valid에서만 수행
+    if args.split != "valid":
+        raise ValueError(
+            "threshold_tune.py only supports split='valid'. "
+            "Do not tune thresholds on test predictions."
+        )
+
     config = load_config(args.config)
     label_names = list(config["data"]["target_labels"])
     output_root = Path(config["paths"]["output_root"])
@@ -58,7 +77,7 @@ def main() -> None:
     pred_csv_path = (
         Path(args.pred_csv)
         if args.pred_csv is not None
-        else find_latest_study_predictions_csv(output_root)
+        else find_latest_study_predictions_csv(output_root, split=args.split)
     )
 
     rows = load_prediction_rows(pred_csv_path)
@@ -74,6 +93,7 @@ def main() -> None:
     print("=" * 100)
     print("threshold_tune.py start")
     print("=" * 100)
+    print(f"split          : {args.split}")
     print(f"prediction_csv : {pred_csv_path}")
     print(f"criterion      : {args.criterion}")
     print(f"output_dir     : {output_dir}")
@@ -112,6 +132,7 @@ def main() -> None:
 
         best_row = {
             "label": label,
+            "split": args.split,
             "num_valid": num_valid,
             "positives": positives,
             "negatives": negatives,
@@ -124,6 +145,7 @@ def main() -> None:
             all_grid_rows.append(
                 {
                     "label": label,
+                    "split": args.split,
                     "num_valid": num_valid,
                     "positives": positives,
                     "negatives": negatives,
@@ -144,6 +166,7 @@ def main() -> None:
         th_max=args.th_max,
         th_step=args.th_step,
     )
+    infer_thresholds_payload["split"] = args.split
     save_json(infer_thresholds_payload, output_dir / "infer_thresholds.json")
 
     print("\n[best thresholds]")

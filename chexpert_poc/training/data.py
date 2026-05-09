@@ -1,3 +1,4 @@
+# chexpert_poc/training/data.py
 from __future__ import annotations
 
 import random
@@ -26,18 +27,33 @@ def _validate_nonnegative_int(name: str, value: Any) -> int:
 
 
 def _seed_worker(worker_id: int) -> None:
-    # worker_id 인자는 PyTorch 시그니처용
+    """
+    DataLoader worker별 random seed를 맞춘다.
+
+    - worker_id 인자는 PyTorch worker_init_fn 시그니처용
+    - torch seed를 기반으로 python random / numpy seed도 동기화
+    """
+    del worker_id
     worker_seed = torch.initial_seed() % 2**32
     random.seed(worker_seed)
     np.random.seed(worker_seed)
 
 
-def create_dataloaders(config: dict) -> tuple[DataLoader, DataLoader]:
+def create_dataloaders(config: dict[str, Any]) -> tuple[DataLoader, DataLoader]:
     """
+    학습(train) / 검증(valid)용 DataLoader 2개를 생성한다.
+
     현재 정책:
     - train shuffle=True
     - valid shuffle=False
-    - seed 기반 generator/worker_init_fn으로 재현성 보강
+    - train drop_last는 config(data.drop_last)를 따름
+    - valid drop_last는 항상 False
+    - seed 기반 generator / worker_init_fn으로 재현성을 보강
+
+    주의:
+    - 이 함수는 training family 전용이다.
+    - test split은 dataset family에는 포함되지만,
+      training policy와 섞이지 않도록 여기서는 의도적으로 다루지 않는다.
     """
     train_dataset = build_chexpert_dataset(config=config, split="train")
     valid_dataset = build_chexpert_dataset(config=config, split="valid")
@@ -76,8 +92,12 @@ def create_dataloaders(config: dict) -> tuple[DataLoader, DataLoader]:
         )
 
     seed = int(project_cfg.get("seed", 42))
-    generator = torch.Generator()
-    generator.manual_seed(seed)
+
+    train_generator = torch.Generator()
+    train_generator.manual_seed(seed)
+
+    valid_generator = torch.Generator()
+    valid_generator.manual_seed(seed + 1)
 
     train_loader_kwargs: dict[str, Any] = {
         "dataset": train_dataset,
@@ -88,7 +108,7 @@ def create_dataloaders(config: dict) -> tuple[DataLoader, DataLoader]:
         "persistent_workers": persistent_workers,
         "drop_last": drop_last,
         "worker_init_fn": _seed_worker,
-        "generator": generator,
+        "generator": train_generator,
     }
 
     valid_loader_kwargs: dict[str, Any] = {
@@ -100,6 +120,7 @@ def create_dataloaders(config: dict) -> tuple[DataLoader, DataLoader]:
         "persistent_workers": persistent_workers,
         "drop_last": False,
         "worker_init_fn": _seed_worker,
+        "generator": valid_generator,
     }
 
     if num_workers > 0 and "prefetch_factor" in data_cfg:

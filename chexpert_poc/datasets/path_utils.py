@@ -5,12 +5,6 @@ from typing import Final, Optional
 
 import pandas as pd
 
-# CSV의 Path 컬럼 값 앞에 붙을 수 있는 prefix 목록
-# : resolve_image_path()에서 실제 로컬 파일 경로를 찾을 때 사용
-# ex)
-# - CheXpert-v1.0-small/train/patient00001/study1/view1_frontal.jpg
-# - CheXpert-v1.0-small/valid/patient64541/study1/view1_frontal.jpg
-
 KNOWN_CSV_PATH_PREFIXES: Final[tuple[str, ...]] = (
     "CheXpert-v1.0-small/",
     "CheXpert-v1.0/",

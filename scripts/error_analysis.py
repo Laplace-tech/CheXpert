@@ -1,3 +1,4 @@
+# scripts/error_analysis.py
 from __future__ import annotations
 
 # eval.py가 만든 study_predictions.csv를 읽어서,
@@ -34,10 +35,17 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="configs/base.yaml")
     parser.add_argument(
+        "--split",
+        type=str,
+        default="valid",
+        choices=["valid", "test"],
+        help="prediction split to analyze",
+    )
+    parser.add_argument(
         "--pred-csv",
         type=str,
         default=None,
-        help="explicit study_predictions.csv path; if omitted, latest eval file is used",
+        help="explicit study_predictions.csv path; if omitted, latest eval file for the selected split is used",
     )
     parser.add_argument(
         "--thresholds",
@@ -61,7 +69,7 @@ def main() -> None:
     pred_csv_path = (
         Path(args.pred_csv)
         if args.pred_csv is not None
-        else find_latest_study_predictions_csv(output_root)
+        else find_latest_study_predictions_csv(output_root, split=args.split)
     )
 
     rows = load_prediction_rows(pred_csv_path)
@@ -84,6 +92,7 @@ def main() -> None:
     print("=" * 100)
     print("error_analysis.py start")
     print("=" * 100)
+    print(f"split             : {args.split}")
     print(f"prediction_csv    : {pred_csv_path}")
     print(f"threshold_source  : {threshold_source}")
     print(f"thresholds        : {thresholds}")
@@ -118,6 +127,7 @@ def main() -> None:
 
         summary_row = {
             "label": label,
+            "split": args.split,
             "threshold": float(threshold),
             "num_valid": len(detailed_rows),
             "positives": positives,
@@ -162,6 +172,7 @@ def main() -> None:
         )
 
     analysis_metadata = {
+        "split": args.split,
         "prediction_csv": str(pred_csv_path),
         "threshold_source": threshold_source,
         "thresholds": thresholds,

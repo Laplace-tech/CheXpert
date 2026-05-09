@@ -1,10 +1,10 @@
+# scripts/sanity_dataloader.py
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
 
-import pandas as pd
 import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -17,22 +17,37 @@ from chexpert_poc.training.data import create_dataloaders
 
 def describe_dataset(name: str, dataset) -> None:
     """
-    Dataset 객체 자체가 기대한 상태인지 확인한다.
+    Dataset 객체가 기대한 상태인지 요약해서 확인한다.
+
+    우선순위:
+    - dataset.dataset_stats가 있으면 그 값을 사용
+    - 없으면 최소 속성만 출력
     """
     print("\n" + "=" * 80)
     print(f"{name} dataset summary")
     print("=" * 80)
 
-    raw_rows = "unknown"
-    if hasattr(dataset, "csv_path") and Path(dataset.csv_path).exists():
-        raw_rows = f"{len(pd.read_csv(dataset.csv_path)):,}"
+    stats = getattr(dataset, "dataset_stats", {}) or {}
 
-    print(f"csv_path: {dataset.csv_path}")
-    print(f"raw_csv_rows: {raw_rows}")
+    print(f"csv_path: {getattr(dataset, 'csv_path', 'unknown')}")
+    print(f"split: {getattr(dataset, 'split', 'unknown')}")
+    print(f"view_mode: {getattr(dataset, 'view_mode', 'unknown')}")
+    print(f"uncertainty_strategy: {getattr(dataset, 'uncertainty_strategy', 'unknown')}")
+    print(f"target_labels: {getattr(dataset, 'target_labels', 'unknown')}")
     print(f"usable_dataset_rows: {len(dataset):,}")
-    print(f"view_mode: {dataset.view_mode}")
-    print(f"uncertainty_strategy: {dataset.uncertainty_strategy}")
-    print(f"target_labels: {dataset.target_labels}")
+
+    if stats:
+        print("\n[dataset_stats]")
+        for key in (
+            "raw_rows",
+            "after_view_filter_rows",
+            "after_path_resolve_rows",
+            "dropped_by_view_filter",
+            "dropped_by_unresolved_path",
+            "usable_rows",
+        ):
+            if key in stats:
+                print(f"{key}: {stats[key]}")
 
     if len(dataset) == 0:
         print("[ERROR] dataset is empty")
@@ -56,6 +71,10 @@ def inspect_batch(name: str, loader) -> None:
     print("\n" + "=" * 80)
     print(f"{name} batch summary")
     print("=" * 80)
+
+    if len(loader) == 0:
+        print("[ERROR] loader has no batches")
+        return
 
     batch = next(iter(loader))
 

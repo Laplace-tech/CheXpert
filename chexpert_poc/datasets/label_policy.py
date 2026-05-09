@@ -13,7 +13,7 @@ CHEXPERT_5_LABELS: Final[tuple[str, ...]] = (
 )
 
 VALID_UNCERTAINTY_STRATEGIES: Final[frozenset[str]] = frozenset(
-    {"U-Ignore", "U-Ones"}
+    {"U-Ignore", "U-Ones", "U-Zero"}
 )
 
 
@@ -37,6 +37,8 @@ def encode_chexpert_label(value: object, strategy: str) -> tuple[float, float]:
             return 0.0, 0.0
         if strategy == "U-Ones":
             return 1.0, 1.0
+        if strategy == "U-Zero":
+            return 0.0, 1.0
 
     raise ValueError(f"Unexpected label value: {value!r}")
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path   # 파일 경로 다루기
-from typing import Callable, Final, Optional  
+from typing import Any, Callable, Final, Optional  
 
 import pandas as pd                  # CSV 읽기
 import torch                         # 텐서 만들기
@@ -17,8 +17,8 @@ from chexpert_poc.datasets.label_policy import (
     is_frontal_view,                # frontal_only일 때 row를 남길지 버릴지 판정
     validate_uncertainty_strategy,  # U-Ignore / U-Ones 설정값 검증
 )
-
 from chexpert_poc.datasets.path_utils import resolve_image_path
+from chexpert_poc.common.config import get_split_csv_path
 
 # 현재 프로젝트에서 허용하는 view 필터 정책
 VALID_VIEW_MODES: Final[set[str]] = {"frontal_only", "all"}
@@ -27,18 +27,23 @@ VALID_VIEW_MODES: Final[set[str]] = {"frontal_only", "all"}
 # [바깥에서 제일 먼저 호출되는 wrapper]
 # - train.py / eval.py / threshold_tune.py 등에서 dataset 만들 때의 진입점
 def build_chexpert_dataset(
-    config: dict,
+    config: dict[str, Any],
     split: str,
-    transform: Optional[Callable] = None,
-) -> CheXpertDataset:
+    transform: Callable | None = None,
+) -> "CheXpertDataset":
+    """
+    config + split 이름(train / valid / test)으로
+    CheXpertDataset 인스턴스를 만드는 진입점.
+
+    주의:
+    - split별 CSV 파일명은 common.config.get_split_csv_path()가 결정한다.
+    - 따라서 test는 test.csv가 아니라 test_labels.csv여도 여기서 자연스럽게 처리된다.
+    """
     
     # raw_root: CheXpert-small 원본 데이터셋 루트 경로
     # csv_path: CSV 파일이 있는 경로:
-    #   ex:
-    #   - /home/anna/datasets/cxr/chexpert_small/raw/train.csv 
-    #   - /home/anna/datasets/cxr/chexpert_small/raw/valid.csv
     raw_root = Path(config["paths"]["chexpert_root"])
-    csv_path = raw_root / f"{split}.csv"
+    csv_path = get_split_csv_path(config, split)
 
     # [base.yaml]
     # - paths.chexpert_root: /home/anna/datasets/cxr/chexpert_small/raw
@@ -80,7 +85,7 @@ class CheXpertDataset(Dataset):
         super().__init__()
 
         # 생성자 인자를 내부 상태로 저장
-        self.csv_path = Path(csv_path) # raw_root: "train.csv" 혹은 "valid.csv"
+        self.csv_path = Path(csv_path) # raw_root: train / valid / test
         self.raw_root = Path(raw_root) # base.yml의 paths.chexpert_root
         self.split = str(split)        # "train" 또는 "valid" 문자열
         self.image_size = int(image_size)

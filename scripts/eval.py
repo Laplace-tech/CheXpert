@@ -1,3 +1,4 @@
+# scripts/eval.py
 from __future__ import annotations
 
 import argparse
@@ -19,35 +20,37 @@ from chexpert_poc.common.config import get_config_bool, get_section, load_config
 from chexpert_poc.common.io import ensure_dir, save_json
 from chexpert_poc.common.model_config import resolve_num_classes
 from chexpert_poc.common.runtime import get_device, move_tensor
-
-# valid dataset 생성
-from chexpert_poc.datasets.chexpert_dataset import build_chexpert_dataset        
-
-# 어떤 checkpoint를 쓸지 찾고 / 읽고 / 현재 config와 호환되는지 검사
+from chexpert_poc.datasets.chexpert_dataset import build_chexpert_dataset
 from chexpert_poc.inference.checkpoint import (
     load_checkpoint,
     resolve_checkpoint_path,
     validate_checkpoint_config,
 )
-
-# checkpoint로부터 실제 모델 복원
-from chexpert_poc.inference.predictor import build_model_from_checkpoint 
-
-# AUROC/AUPRC 계산 / 콘솔 출력용 표 생성
+from chexpert_poc.inference.predictor import build_model_from_checkpoint
 from chexpert_poc.metrics.classification import (
     compute_multilabel_classification_metrics,
     format_classification_metrics_table,
 )
 
-# loader helper
-def build_valid_loader(config: dict) -> DataLoader:
+SUPPORTED_EVAL_SPLITS = ("valid", "test")
+
+
+def build_eval_loader(
+    config: dict[str, Any],
+    split: str,
+) -> DataLoader:
     """
-    eval 전용 valid DataLoader 생성
+    eval 전용 DataLoader 생성
+    - valid / test 지원
     - shuffle=False
     - drop_last=False
     """
-    valid_dataset = build_chexpert_dataset(config=config, split="valid")
+    if split not in SUPPORTED_EVAL_SPLITS:
+        raise ValueError(
+            f"Unsupported eval split: {split}. Expected one of {SUPPORTED_EVAL_SPLITS}"
+        )
 
+    eval_dataset = build_chexpert_dataset(config=config, split=split)
     data_cfg = get_section(config, "data")
 
     batch_size = int(data_cfg["batch_size"])
@@ -75,7 +78,7 @@ def build_valid_loader(config: dict) -> DataLoader:
         persistent_workers = False
 
     loader_kwargs: dict[str, Any] = {
-        "dataset": valid_dataset,
+        "dataset": eval_dataset,
         "batch_size": batch_size,
         "shuffle": False,
         "num_workers": num_workers,
@@ -94,10 +97,6 @@ def build_valid_loader(config: dict) -> DataLoader:
 
     return DataLoader(**loader_kwargs)
 
-
-# =========================================================
-# inference / aggregation
-# =========================================================
 
 @torch.inference_mode()
 def run_inference(
@@ -118,13 +117,6 @@ def run_inference(
         images = move_tensor(batch["image"], device=device, channels_last=channels_last)
 
         logits = model(images)
-        
-        """
-        Logits를 멀티라벨 확률로 변환한다.
-        - model은 sigmoid 미적용된 raw logits를 출력한다.
-        - eval/infer 시에는 확률이 필요하므로 sigmoid가 적용됨.
-        - 다중 분류가 아니라 이진 멀티라벨 분류이므로 각 클래스가 독립적으로 0~1 확률을 가짐.
-        """
         probs = torch.sigmoid(logits)
 
         all_probs.append(probs.detach().cpu().numpy())
@@ -213,10 +205,6 @@ def aggregate_by_study_max(
     }
 
 
-# =========================================================
-# save / metadata
-# =========================================================
-
 def save_study_predictions_csv(
     path: str | Path,
     probs: np.ndarray,
@@ -226,11 +214,9 @@ def save_study_predictions_csv(
     study_ids: list[str],
     label_names: list[str],
 ) -> None:
-    # study_predictions.csv 저장
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 컬럼 이름 구성
     fieldnames = ["path", "study_id"]
     for label in label_names:
         fieldnames.extend(
@@ -258,33 +244,41 @@ def save_study_predictions_csv(
 
 
 def build_eval_metadata(
-    config: dict,
+    config: dict[str, Any],
     checkpoint_path: Path,
-    valid_loader: DataLoader,
+    eval_loader: DataLoader,
     raw_result: dict[str, Any],
     study_result: dict[str, Any],
     channels_last: bool,
     num_classes: int,
+    split: str,
 ) -> dict[str, Any]:
-    # eval_metadata.json 저장용 메타정보
     return {
+        "split": split,
         "checkpoint_path": str(checkpoint_path),
         "aggregation": "study_max",
-        "num_valid_images": int(raw_result["probs"].shape[0]),
-        "num_valid_studies": int(study_result["probs"].shape[0]),
-        "batch_size": int(valid_loader.batch_size),
-        "num_batches": int(len(valid_loader)),
+        "num_images": int(raw_result["probs"].shape[0]),
+        "num_studies": int(study_result["probs"].shape[0]),
+        "batch_size": int(eval_loader.batch_size),
+        "num_batches": int(len(eval_loader)),
         "target_labels": list(config["data"]["target_labels"]),
         "num_classes": num_classes,
         "channels_last": channels_last,
-        "pretrained": False,  # eval은 checkpoint load 전제
-        "dataset_stats": getattr(valid_loader.dataset, "dataset_stats", None),
+        "pretrained": False,
+        "dataset_stats": getattr(eval_loader.dataset, "dataset_stats", None),
     }
 
 
-# =========================================================
-# main
-# =========================================================
+def resolve_eval_run_dir(checkpoint_path: Path, split: str) -> Path:
+    run_root = checkpoint_path.parent.parent
+
+    if split == "valid":
+        return ensure_dir(run_root / "eval")
+    if split == "test":
+        return ensure_dir(run_root / "eval_test")
+
+    raise ValueError(f"Unsupported eval split: {split}")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -294,6 +288,13 @@ def main() -> None:
         type=str,
         default=None,
         help="explicit checkpoint path; if omitted, latest best.pt is used",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="valid",
+        choices=SUPPORTED_EVAL_SPLITS,
+        help="evaluation split: valid or test",
     )
     args = parser.parse_args()
 
@@ -313,13 +314,14 @@ def main() -> None:
     print("=" * 100)
     print("eval.py start")
     print("=" * 100)
+    print(f"eval_split     : {args.split}")
     print(f"device         : {device}")
     print(f"checkpoint_path: {checkpoint_path}")
     print(f"channels_last  : {channels_last}")
     print(f"num_classes    : {num_classes}")
     print(f"pretrained     : False (checkpoint load 전제)")
 
-    valid_loader = build_valid_loader(config=config)
+    eval_loader = build_eval_loader(config=config, split=args.split)
 
     model = build_model_from_checkpoint(
         checkpoint=checkpoint,
@@ -330,7 +332,7 @@ def main() -> None:
 
     raw_result = run_inference(
         model=model,
-        loader=valid_loader,
+        loader=eval_loader,
         device=device,
         channels_last=channels_last,
     )
@@ -350,16 +352,17 @@ def main() -> None:
         loss_mask=study_result["loss_masks"],
     )
 
-    run_dir = ensure_dir(checkpoint_path.parent.parent / "eval")
+    run_dir = resolve_eval_run_dir(checkpoint_path=checkpoint_path, split=args.split)
 
     eval_metadata = build_eval_metadata(
         config=config,
         checkpoint_path=checkpoint_path,
-        valid_loader=valid_loader,
+        eval_loader=eval_loader,
         raw_result=raw_result,
         study_result=study_result,
         channels_last=channels_last,
         num_classes=num_classes,
+        split=args.split,
     )
 
     save_json(per_class_results, run_dir / "per_class_metrics.json")

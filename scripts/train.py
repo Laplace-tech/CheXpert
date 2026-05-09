@@ -1,3 +1,9 @@
+# train.py는 training family 전용 스크립트다.
+# - train split: gradient update
+# - valid split: model selection / monitoring
+# - test split: 여기서 다루지 않음
+#   최종 평가는 별도 evaluation 단계에서 수행한다.
+
 from __future__ import annotations
 
 import argparse  # --config 같은 CLI 인자 받기
@@ -42,6 +48,9 @@ from chexpert_poc.training.optim import build_optimizer
 
 # train/valid dataloader 생성 로직
 from chexpert_poc.training.data import create_dataloaders
+
+
+
 
 
 # 로그 출력용: 3721초 -> "1h 02m 01s"

@@ -6,16 +6,24 @@ from pathlib import Path
 import numpy as np
 
 
-def find_latest_study_predictions_csv(output_root: str | Path) -> Path:
+def find_latest_study_predictions_csv(
+    output_root: str | Path,
+    split: str = "valid",
+) -> Path:
     output_root = Path(output_root)
-    candidates = list(output_root.glob("train_runs/*/eval/study_predictions.csv"))
-    if not candidates:
-        raise FileNotFoundError(
-            f"No study_predictions.csv found under: {output_root / 'train_runs'}"
-        )
 
-    candidates = sorted(candidates, key=lambda p: p.stat().st_mtime)
-    return candidates[-1]
+    if split == "valid":
+        pattern = "train_runs/*/eval/study_predictions.csv"
+    elif split == "test":
+        pattern = "train_runs/*/eval_test/study_predictions.csv"
+    else:
+        raise ValueError(f"Unsupported split: {split}")
+
+    candidates = list(output_root.glob(pattern))
+    if not candidates:
+        raise FileNotFoundError(f"No study_predictions.csv found for split={split}")
+
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
 def load_prediction_rows(csv_path: str | Path) -> list[dict[str, str]]:
