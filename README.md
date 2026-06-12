@@ -17,6 +17,25 @@ This project trains and evaluates a chest X-ray classification model for five Ch
 
 The model predicts class-wise probabilities and supports Grad-CAM visualization for explainable inference.
 
+| Item | Description |
+|---|---|
+| Project Type | Research PoC / Model Experiment Repository |
+| Development Period | 2026.03 – 2026.04 |
+| Main Task | Multi-label chest X-ray classification |
+| Dataset | CheXpert-small |
+| Backbone | DenseNet121 |
+| Explainability | Grad-CAM |
+
+## Project Period
+
+This repository was developed as the research and model experimentation phase of the capstone project.
+
+| Phase | Period | Description |
+|---|---|---|
+| Initial Setup | 2026.03 | CheXpert-small dataset structure setup, preprocessing policy design, and baseline DenseNet121 training pipeline implementation |
+| Model Experiments | 2026.03 – 2026.04 | Uncertainty policy comparison, training configuration refinement, AUROC/AUPRC evaluation, and threshold tuning |
+| Inference & Visualization | 2026.04 | Image-level inference pipeline, Grad-CAM visualization, error analysis, and reusable inference logic preparation |
+
 ## Main Features
 
 - CheXpert-small data loading
@@ -206,6 +225,7 @@ python scripts/gradcam_demo.py \
 ## Notes
 
 - This repository is for research and proof-of-concept experiments.
+- The development period was **2026.03 – 2026.04**.
 - It is not a standalone medical device.
 - Model outputs should be interpreted only as decision-support information.
 - CheXpert data, model checkpoints, logs, and generated outputs are excluded from Git tracking.
