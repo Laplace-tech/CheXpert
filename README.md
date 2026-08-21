@@ -1,9 +1,12 @@
 # CheXpert PoC
 
-DenseNet121-based multi-label chest X-ray classification pipeline using the CheXpert-small dataset.
+> DenseNet121-based multi-label Chest X-ray classification pipeline using CheXpert-small.
 
-This repository is the research and experiment codebase for the capstone project.  
-The production web service is managed separately in `capstone-cxr`.
+Research and experiment codebase for model training, evaluation, threshold tuning,
+inference, and Grad-CAM validation. The production web service is maintained separately in
+[`capstone-cxr`](https://github.com/Laplace-tech/capstone-cxr).
+
+---
 
 ## Project Overview
 
@@ -21,7 +24,7 @@ The model predicts class-wise probabilities and supports Grad-CAM visualization 
 |---|---|
 | Project Type | Research PoC / Model Experiment Repository |
 | Development Period | 2026.03 – 2026.04 |
-| Main Task | Multi-label chest X-ray classification |
+| Main Task | Multi-label Chest X-ray classification |
 | Dataset | CheXpert-small |
 | Backbone | DenseNet121 |
 | Explainability | Grad-CAM |
@@ -32,22 +35,19 @@ This repository was developed as the research and model experimentation phase of
 
 | Phase | Period | Description |
 |---|---|---|
-| Initial Setup | 2026.03 | CheXpert-small dataset structure setup, preprocessing policy design, and baseline DenseNet121 training pipeline implementation |
-| Model Experiments | 2026.03 – 2026.04 | Uncertainty policy comparison, training configuration refinement, AUROC/AUPRC evaluation, and threshold tuning |
-| Inference & Visualization | 2026.04 | Image-level inference pipeline, Grad-CAM visualization, error analysis, and reusable inference logic preparation |
+| Initial Setup | 2026.03 | Dataset structure setup · Preprocessing policy design · Baseline training pipeline |
+| Model Experiments | 2026.03 – 2026.04 | Uncertainty policy comparison · Training refinement · AUROC/AUPRC evaluation · Threshold tuning |
+| Inference & Visualization | 2026.04 | Image-level inference · Grad-CAM · Error analysis · Reusable inference logic |
 
 ## Main Features
 
-- CheXpert-small data loading
-- Frontal-view-only training policy
-- DenseNet121 multi-label classifier
-- Uncertainty label policy comparison: U-Ignore, U-Ones, U-Zeros
-- BCEWithLogitsLoss with `pos_weight`
-- AUROC and AUPRC evaluation
-- F1-based threshold tuning
-- Image-level inference
-- Grad-CAM visualization
-- Reusable inference service functions for later migration
+| Stage | Features |
+|---|---|
+| Data | CheXpert-small loading · Frontal-view-only policy |
+| Label Policy | U-Ignore · U-Ones · U-Zero comparison |
+| Training | DenseNet121 · `BCEWithLogitsLoss` · `pos_weight` |
+| Evaluation | AUROC · AUPRC · F1-based threshold tuning · Error analysis |
+| Inference | Image-level prediction · Grad-CAM visualization · Reusable service functions |
 
 ## Repository Structure
 
@@ -61,10 +61,12 @@ chexpert_poc/
 │   ├── inference/       # inference, postprocess, artifact handling
 │   ├── metrics/         # classification metrics
 │   ├── models/          # DenseNet121 model definition
-│   └── utils/           # training utilities
+│   └── training/        # dataloader, loss, optimizer, class weights
 ├── configs/
 │   └── base.yaml
 ├── scripts/
+│   ├── check_dataset.py
+│   ├── sanity_dataloader.py
 │   ├── train.py
 │   ├── eval.py
 │   ├── threshold_tune.py
@@ -84,8 +86,10 @@ Expected local dataset path:
 data/chexpert_small/raw/
 ├── train.csv
 ├── valid.csv
+├── test_labels.csv
 ├── train/
-└── valid/
+├── valid/
+└── test/
 ```
 
 Only frontal-view images are used.
@@ -106,7 +110,7 @@ CheXpert contains uncertain labels. This project compares three uncertainty labe
 |---|---|
 | U-Ignore | Exclude uncertain labels from loss calculation |
 | U-Ones | Treat uncertain labels as positive |
-| U-Zeros | Treat uncertain labels as negative |
+| U-Zero | Treat uncertain labels as negative |
 
 The representative model uses **U-Ignore** because it achieved the highest test AUROC while avoiding forced positive or negative assignment of uncertain labels.
 
@@ -132,9 +136,9 @@ The representative model uses **U-Ignore** because it achieved the highest test 
 
 | Policy | Valid AUROC | Valid AUPRC | Test AUROC | Test AUPRC |
 |---|---:|---:|---:|---:|
-| U-Ignore | 0.8817 | 0.7387 | 0.8927 | 0.6494 |
+| U-Ignore | 0.8811 | **0.7387** | **0.8927** | 0.6494 |
 | U-Ones | 0.8778 | 0.7216 | 0.8715 | 0.6116 |
-| U-Zeros | 0.8837 | 0.7302 | 0.8903 | 0.6597 |
+| U-Zero | **0.8837** | 0.7302 | 0.8903 | **0.6597** |
 
 Representative U-Ignore model:
 
@@ -145,7 +149,13 @@ Representative U-Ignore model:
 
 ### Model Evaluation and Threshold Selection
 
-![Model Evaluation Metrics and Threshold Selection](docs/images/model-evaluation-threshold-selection.png)
+<p align="center">
+  <img
+    src="docs/images/model-evaluation-threshold-selection.png"
+    width="920"
+    alt="Model evaluation metrics and threshold selection"
+  />
+</p>
 
 Class-specific thresholds were tuned on the validation set to maximize per-class F1-score.
 
@@ -157,53 +167,68 @@ Class-specific thresholds were tuned on the validation set to maximize per-class
 | Edema | 0.34 |
 | Pleural Effusion | 0.37 |
 
+> Thresholds are tuned only on validation predictions. Test predictions are reserved for evaluation.
+
 ## Grad-CAM Visualization
 
 Grad-CAM is used to visualize model attention over chest X-ray regions.  
 It is provided as supporting evidence and does not replace clinical interpretation.
 
-![Model Inference and Grad-CAM Visualization](docs/images/model-inference-gradcam-visualization.png)
+<p align="center">
+  <img
+    src="docs/images/model-inference-gradcam-visualization.png"
+    width="920"
+    alt="Model inference and Grad-CAM visualization"
+  />
+</p>
+
+---
 
 ## Quickstart
 
-Create and activate the virtual environment:
+### 1. Environment
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+
+python -m pip install --upgrade pip
+python -m pip install torch torchvision
+python -m pip install numpy pandas scikit-learn matplotlib pyyaml pillow tqdm
 ```
 
-Check dataset:
+### 2. Dataset Check
 
 ```bash
 python scripts/check_dataset.py --config configs/base.yaml
 ```
 
-Train:
+### 3. Training
 
 ```bash
 python scripts/train.py --config configs/base.yaml
 ```
 
-Evaluate:
+### 4. Validation Evaluation
 
 ```bash
 python scripts/eval.py \
   --config configs/base.yaml \
-  --checkpoint outputs/train_runs/<run_id>/checkpoints/best.pt
+  --checkpoint outputs/train_runs/<run_id>/checkpoints/best.pt \
+  --split valid
 ```
 
-Tune thresholds:
+### 5. Threshold Tuning
 
 ```bash
 python scripts/threshold_tune.py \
   --config configs/base.yaml \
-  --checkpoint outputs/train_runs/<run_id>/checkpoints/best.pt \
+  --split valid \
+  --pred-csv outputs/train_runs/<run_id>/eval/study_predictions.csv \
   --criterion f1
 ```
 
-Run inference:
+### 6. Inference
 
 ```bash
 python scripts/infer.py \
@@ -212,7 +237,7 @@ python scripts/infer.py \
   --input path/to/image.jpg
 ```
 
-Run Grad-CAM:
+### 7. Grad-CAM
 
 ```bash
 python scripts/gradcam_demo.py \
@@ -221,6 +246,8 @@ python scripts/gradcam_demo.py \
   --input path/to/image.jpg \
   --label "Pleural Effusion"
 ```
+
+---
 
 ## Notes
 
